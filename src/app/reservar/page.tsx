@@ -3,6 +3,8 @@
 import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { format, parseISO } from 'date-fns'
+import { ca } from 'date-fns/locale'
 
 function ReservaContent() {
   const searchParams = useSearchParams()
@@ -10,6 +12,7 @@ function ReservaContent() {
   
   const [sesion, setSesion] = useState<any>(null)
   const [alumnos, setAlumnos] = useState<any[]>([])
+  const [participantes, setParticipantes] = useState<any[]>([])
   const [nombre, setNombre] = useState('')
   const [telefono, setTelefono] = useState('')
   const [exito, setExito] = useState(false)
@@ -27,6 +30,17 @@ function ReservaContent() {
       .eq('enlace_token', token)
       .single()
     setSesion(data)
+    if (data) cargarParticipantes(data.id)
+  }
+
+  async function cargarParticipantes(sesionId: string) {
+    const { data } = await supabase
+      .from('vista_reservas')
+      .select('*')
+      .eq('sesion_id', sesionId)
+      .neq('estado', 'cancelado')
+      .order('fecha_reserva')
+    setParticipantes(data || [])
   }
 
   async function cargarAlumnos() {
@@ -38,7 +52,7 @@ function ReservaContent() {
     e.preventDefault()
     setError('')
 
-    if (!sesion) return setError('Sesión no encontrada')
+    if (!sesion) return setError('Sessió no trobada')
 
     let alumnoId: string
     const { data: existente } = await supabase.from('alumnos').select('id').eq('nombre', nombre).single()
@@ -47,11 +61,11 @@ function ReservaContent() {
       alumnoId = existente.id
     } else {
       const { data: nuevo, error: err } = await supabase.from('alumnos').insert({ nombre, telefono }).select('id').single()
-      if (err) return setError('Error al crear alumno')
+      if (err) return setError('Error en crear l\'alumne')
       alumnoId = nuevo!.id
     }
 
-    if (sesion.plazas_libres <= 0) return setError('Lo siento, no quedan plazas disponibles.')
+    if (sesion.plazas_libres <= 0) return setError('Ho sentim, no queden places disponibles.')
 
     const { error: errReserva } = await supabase.from('reservas').insert({
       sesion_id: sesion.id,
@@ -59,19 +73,22 @@ function ReservaContent() {
     })
 
     if (errReserva) {
-      if (errReserva.message.includes('unique')) return setError('Ya tienes una reserva en esta sesión.')
-      return setError('Error al reservar. Inténtalo de nuevo.')
+      if (errReserva.message.includes('unique')) return setError('Ja tens una reserva en aquesta sessió.')
+      return setError('Error en reservar. Torna-ho a provar.')
     }
 
     setExito(true)
+    cargarParticipantes(sesion.id)
   }
+
+  const fechaBonita = sesion?.fecha ? format(parseISO(sesion.fecha), "d 'de' MMMM", { locale: ca }) : ''
 
   if (!token) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-slate-800 mb-2">Reservar clase</h1>
-          <p className="text-slate-500">Escanea el código o usa el enlace que te envió tu entrenador.</p>
+          <h1 className="text-2xl font-bold text-slate-800 mb-2">Reservar classe</h1>
+          <p className="text-slate-500">Escaneja el codi o fes servir l'enllaç que t'ha enviat el teu entrenador.</p>
         </div>
       </div>
     )
@@ -82,11 +99,24 @@ function ReservaContent() {
       <div className="min-h-screen flex items-center justify-center p-6 bg-emerald-50">
         <div className="bg-white p-8 rounded-2xl shadow-lg text-center max-w-md">
           <div className="text-5xl mb-4">✅</div>
-          <h2 className="text-2xl font-bold text-emerald-700 mb-2">¡Reserva confirmada!</h2>
+          <h2 className="text-2xl font-bold text-emerald-700 mb-2">Reserva confirmada!</h2>
           <p className="text-slate-600 mb-4">
-            {sesion?.actividad_nombre} — {sesion?.dia_semana} {sesion?.fecha} a las {sesion?.hora?.slice(0,5)}
+            {sesion?.actividad_nombre} — {sesion?.dia_semana} {fechaBonita} a les {sesion?.hora?.slice(0,5)}
           </p>
-          <p className="text-sm text-slate-400">Te esperamos. ¡No faltes!</p>
+          <p className="text-sm text-slate-400 mb-6">T'esperem. No faltis!</p>
+
+          {participantes.length > 0 && (
+            <div className="text-left bg-slate-50 rounded-xl p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">
+                Participants ({participantes.length})
+              </div>
+              <div className="text-sm text-slate-600 space-y-1">
+                {participantes.map((p) => (
+                  <div key={p.id}>{p.alumno_nombre}</div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     )
@@ -95,20 +125,33 @@ function ReservaContent() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-slate-100">
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
-        <h1 className="text-2xl font-bold text-slate-800 mb-1">Reservar plaza</h1>
+        <h1 className="text-2xl font-bold text-slate-800 mb-1">Reservar plaça</h1>
         
         {sesion ? (
-          <div className="mb-6 p-4 bg-blue-50 rounded-xl">
+          <div className="mb-4 p-4 bg-blue-50 rounded-xl">
             <div className="font-semibold text-blue-800">{sesion.actividad_nombre}</div>
-            <div className="text-blue-600">{sesion.dia_semana} {sesion.fecha} — {sesion.hora?.slice(0,5)}</div>
+            <div className="text-blue-600">{sesion.dia_semana} {fechaBonita} — {sesion.hora?.slice(0,5)}</div>
             <div className="text-sm text-blue-500 mt-1">
               {sesion.plazas_libres > 0 
-                ? `Quedan ${sesion.plazas_libres} plazas disponibles` 
-                : '⚠️ No quedan plazas'}
+                ? `Queden ${sesion.plazas_libres} places disponibles` 
+                : '⚠️ No queden places'}
             </div>
           </div>
         ) : (
-          <div className="mb-6 text-slate-400">Cargando sesión...</div>
+          <div className="mb-6 text-slate-400">Carregant sessió...</div>
+        )}
+
+        {participantes.length > 0 && (
+          <div className="mb-6 bg-slate-50 rounded-xl p-4">
+            <div className="text-sm font-semibold text-slate-700 mb-2">
+              Participants ({participantes.length})
+            </div>
+            <div className="text-sm text-slate-600 space-y-1">
+              {participantes.map((p) => (
+                <div key={p.id}>{p.alumno_nombre}</div>
+              ))}
+            </div>
+          </div>
         )}
 
         {error && (
@@ -117,13 +160,13 @@ function ReservaContent() {
 
         <form onSubmit={reservar} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Tu nombre</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">El teu nom</label>
             <input
               list="alumnos-list"
               value={nombre}
               onChange={e => setNombre(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              placeholder="Ej: María García"
+              placeholder="Ex: Maria Garcia"
               required
             />
             <datalist id="alumnos-list">
@@ -132,7 +175,7 @@ function ReservaContent() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Teléfono (opcional)</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Telèfon (opcional)</label>
             <input
               type="tel"
               value={telefono}
@@ -147,7 +190,7 @@ function ReservaContent() {
             disabled={!sesion || sesion.plazas_libres <= 0}
             className="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition"
           >
-            {sesion?.plazas_libres <= 0 ? 'Sin plazas disponibles' : 'Confirmar reserva'}
+            {sesion?.plazas_libres <= 0 ? 'Sense places disponibles' : 'Confirmar reserva'}
           </button>
         </form>
       </div>
@@ -159,7 +202,7 @@ export default function ReservarPage() {
   return (
     <Suspense fallback={
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-slate-400">Cargando...</div>
+        <div className="text-slate-400">Carregant...</div>
       </div>
     }>
       <ReservaContent />
