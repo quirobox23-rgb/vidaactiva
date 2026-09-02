@@ -1,4 +1,3 @@
-
 'use client'
 
 import { useEffect, useState } from 'react'
@@ -10,12 +9,23 @@ type Alumno = {
   nombre: string
 }
 
+type Sesion = {
+  id: string
+  actividad_nombre: string
+  dia_semana: string
+  fecha: string
+  hora: string
+}
+
 type Pago = {
   id: string
   alumno_id: string
-  cantidad: number
-  concepto: string
-  fecha: string
+  sesion_id: string | null
+  monto: number
+  metodo: string
+  pagado: boolean
+  fecha_pago: string
+  notas: string | null
   created_at: string
   alumnos?: {
     nombre: string
@@ -25,7 +35,8 @@ type Pago = {
 type Gasto = {
   id: string
   concepto: string
-  cantidad: number
+  categoria: string
+  monto: number
   fecha: string
 }
 
@@ -33,18 +44,23 @@ export default function FinanzasPage() {
   const [pagos, setPagos] = useState<Pago[]>([])
   const [gastos, setGastos] = useState<Gasto[]>([])
   const [alumnos, setAlumnos] = useState<Alumno[]>([])
+  const [sesiones, setSesiones] = useState<Sesion[]>([])
   const [error, setError] = useState('')
   const [cargando, setCargando] = useState(true)
 
   const [alumnoId, setAlumnoId] = useState('')
-  const [cantidadPago, setCantidadPago] = useState('')
-  const [conceptoPago, setConceptoPago] = useState('Mensualidad')
+  const [sesionId, setSesionId] = useState('')
+  const [montoPago, setMontoPago] = useState('')
+  const [metodoPago, setMetodoPago] = useState('Efectivo')
+  const [pagadoPago, setPagadoPago] = useState(true)
   const [fechaPago, setFechaPago] = useState(
     new Date().toISOString().split('T')[0]
   )
+  const [notasPago, setNotasPago] = useState('')
 
   const [conceptoGasto, setConceptoGasto] = useState('')
-  const [cantidadGasto, setCantidadGasto] = useState('')
+  const [categoriaGasto, setCategoriaGasto] = useState('')
+  const [montoGasto, setMontoGasto] = useState('')
   const [fechaGasto, setFechaGasto] = useState(
     new Date().toISOString().split('T')[0]
   )
@@ -72,10 +88,16 @@ export default function FinanzasPage() {
       .select('id, nombre')
       .order('nombre')
 
-    if (pErr || gErr || aErr) {
+    const { data: s, error: sErr } = await supabase
+      .from('vista_sesiones')
+      .select('id, actividad_nombre, dia_semana, fecha, hora')
+      .order('fecha', { ascending: false })
+      .limit(50)
+
+    if (pErr || gErr || aErr || sErr) {
       setError(
         'Error al cargar datos: ' +
-          (pErr?.message || gErr?.message || aErr?.message)
+          (pErr?.message || gErr?.message || aErr?.message || sErr?.message)
       )
       setCargando(false)
       return
@@ -84,6 +106,7 @@ export default function FinanzasPage() {
     setPagos(p || [])
     setGastos(g || [])
     setAlumnos(a || [])
+    setSesiones(s || [])
     setCargando(false)
   }
 
@@ -91,16 +114,19 @@ export default function FinanzasPage() {
     e.preventDefault()
     setError('')
 
-    if (!alumnoId || !cantidadPago) {
+    if (!alumnoId || !montoPago) {
       setError('Selecciona un alumno e introduce una cantidad.')
       return
     }
 
     const { error: insertError } = await supabase.from('pagos').insert({
       alumno_id: alumnoId,
-      cantidad: Number(cantidadPago),
-      concepto: conceptoPago,
-      fecha: fechaPago,
+      sesion_id: sesionId || null,
+      monto: Number(montoPago),
+      metodo: metodoPago,
+      pagado: pagadoPago,
+      fecha_pago: fechaPago,
+      notas: notasPago || null,
     })
 
     if (insertError) {
@@ -109,9 +135,12 @@ export default function FinanzasPage() {
     }
 
     setAlumnoId('')
-    setCantidadPago('')
-    setConceptoPago('Mensualidad')
+    setSesionId('')
+    setMontoPago('')
+    setMetodoPago('Efectivo')
+    setPagadoPago(true)
     setFechaPago(new Date().toISOString().split('T')[0])
+    setNotasPago('')
 
     await cargarDatos()
   }
@@ -120,14 +149,15 @@ export default function FinanzasPage() {
     e.preventDefault()
     setError('')
 
-    if (!conceptoGasto || !cantidadGasto) {
-      setError('Introduce el concepto y la cantidad del gasto.')
+    if (!conceptoGasto || !categoriaGasto || !montoGasto) {
+      setError('Introduce el concepto, la categoría y la cantidad del gasto.')
       return
     }
 
     const { error: insertError } = await supabase.from('gastos').insert({
       concepto: conceptoGasto,
-      cantidad: Number(cantidadGasto),
+      categoria: categoriaGasto,
+      monto: Number(montoGasto),
       fecha: fechaGasto,
     })
 
@@ -137,7 +167,8 @@ export default function FinanzasPage() {
     }
 
     setConceptoGasto('')
-    setCantidadGasto('')
+    setCategoriaGasto('')
+    setMontoGasto('')
     setFechaGasto(new Date().toISOString().split('T')[0])
 
     await cargarDatos()
@@ -176,12 +207,12 @@ export default function FinanzasPage() {
   }
 
   const totalPagos = pagos.reduce(
-    (total, pago) => total + Number(pago.cantidad || 0),
+    (total, pago) => total + Number(pago.monto || 0),
     0
   )
 
   const totalGastos = gastos.reduce(
-    (total, gasto) => total + Number(gasto.cantidad || 0),
+    (total, gasto) => total + Number(gasto.monto || 0),
     0
   )
 
@@ -264,6 +295,26 @@ export default function FinanzasPage() {
 
               <div>
                 <label className="mb-1 block text-sm font-medium">
+                  Sesión (opcional)
+                </label>
+
+                <select
+                  value={sesionId}
+                  onChange={(e) => setSesionId(e.target.value)}
+                  className="w-full rounded-lg border p-2"
+                >
+                  <option value="">Sin sesión (ej: mensualidad)</option>
+
+                  {sesiones.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.actividad_nombre} — {s.dia_semana} {s.fecha}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium">
                   Cantidad (€)
                 </label>
 
@@ -271,8 +322,8 @@ export default function FinanzasPage() {
                   type="number"
                   step="0.01"
                   min="0"
-                  value={cantidadPago}
-                  onChange={(e) => setCantidadPago(e.target.value)}
+                  value={montoPago}
+                  onChange={(e) => setMontoPago(e.target.value)}
                   className="w-full rounded-lg border p-2"
                   placeholder="50.00"
                 />
@@ -280,15 +331,32 @@ export default function FinanzasPage() {
 
               <div>
                 <label className="mb-1 block text-sm font-medium">
-                  Concepto
+                  Método de pago
                 </label>
 
-                <input
-                  type="text"
-                  value={conceptoPago}
-                  onChange={(e) => setConceptoPago(e.target.value)}
+                <select
+                  value={metodoPago}
+                  onChange={(e) => setMetodoPago(e.target.value)}
                   className="w-full rounded-lg border p-2"
+                >
+                  <option value="Efectivo">Efectivo</option>
+                  <option value="Tarjeta">Tarjeta</option>
+                  <option value="Transferencia">Transferencia</option>
+                  <option value="Bizum">Bizum</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="pagado"
+                  checked={pagadoPago}
+                  onChange={(e) => setPagadoPago(e.target.checked)}
+                  className="h-4 w-4"
                 />
+                <label htmlFor="pagado" className="text-sm font-medium">
+                  Pagado
+                </label>
               </div>
 
               <div>
@@ -301,6 +369,20 @@ export default function FinanzasPage() {
                   value={fechaPago}
                   onChange={(e) => setFechaPago(e.target.value)}
                   className="w-full rounded-lg border p-2"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium">
+                  Notas (opcional)
+                </label>
+
+                <input
+                  type="text"
+                  value={notasPago}
+                  onChange={(e) => setNotasPago(e.target.value)}
+                  className="w-full rounded-lg border p-2"
+                  placeholder="Mensualidad de septiembre"
                 />
               </div>
 
@@ -336,6 +418,20 @@ export default function FinanzasPage() {
 
               <div>
                 <label className="mb-1 block text-sm font-medium">
+                  Categoría
+                </label>
+
+                <input
+                  type="text"
+                  value={categoriaGasto}
+                  onChange={(e) => setCategoriaGasto(e.target.value)}
+                  className="w-full rounded-lg border p-2"
+                  placeholder="Material, Alquiler, Suministros..."
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium">
                   Cantidad (€)
                 </label>
 
@@ -343,8 +439,8 @@ export default function FinanzasPage() {
                   type="number"
                   step="0.01"
                   min="0"
-                  value={cantidadGasto}
-                  onChange={(e) => setCantidadGasto(e.target.value)}
+                  value={montoGasto}
+                  onChange={(e) => setMontoGasto(e.target.value)}
                   className="w-full rounded-lg border p-2"
                   placeholder="100.00"
                 />
@@ -387,7 +483,8 @@ export default function FinanzasPage() {
                   <tr className="border-b">
                     <th className="p-3">Fecha</th>
                     <th className="p-3">Alumno</th>
-                    <th className="p-3">Concepto</th>
+                    <th className="p-3">Método</th>
+                    <th className="p-3">Pagado</th>
                     <th className="p-3">Cantidad</th>
                     <th className="p-3">Acción</th>
                   </tr>
@@ -396,13 +493,14 @@ export default function FinanzasPage() {
                 <tbody>
                   {pagos.map((pago) => (
                     <tr key={pago.id} className="border-b">
-                      <td className="p-3">{pago.fecha}</td>
+                      <td className="p-3">{pago.fecha_pago}</td>
                       <td className="p-3">
                         {pago.alumnos?.nombre || 'Sin alumno'}
                       </td>
-                      <td className="p-3">{pago.concepto}</td>
+                      <td className="p-3">{pago.metodo}</td>
+                      <td className="p-3">{pago.pagado ? '✅' : '❌'}</td>
                       <td className="p-3 font-medium">
-                        {Number(pago.cantidad).toFixed(2)} €
+                        {Number(pago.monto).toFixed(2)} €
                       </td>
                       <td className="p-3">
                         <button
@@ -434,6 +532,7 @@ export default function FinanzasPage() {
                   <tr className="border-b">
                     <th className="p-3">Fecha</th>
                     <th className="p-3">Concepto</th>
+                    <th className="p-3">Categoría</th>
                     <th className="p-3">Cantidad</th>
                     <th className="p-3">Acción</th>
                   </tr>
@@ -444,8 +543,9 @@ export default function FinanzasPage() {
                     <tr key={gasto.id} className="border-b">
                       <td className="p-3">{gasto.fecha}</td>
                       <td className="p-3">{gasto.concepto}</td>
+                      <td className="p-3">{gasto.categoria}</td>
                       <td className="p-3 font-medium">
-                        {Number(gasto.cantidad).toFixed(2)} €
+                        {Number(gasto.monto).toFixed(2)} €
                       </td>
                       <td className="p-3">
                         <button
@@ -466,4 +566,3 @@ export default function FinanzasPage() {
     </main>
   )
 }
-
