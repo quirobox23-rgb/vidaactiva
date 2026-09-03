@@ -10,6 +10,10 @@ export default function AlumnosPage() {
   const [telefono, setTelefono] = useState('')
   const [mensaje, setMensaje] = useState('')
   const [error, setError] = useState('')
+  const [editandoId, setEditandoId] = useState<string | null>(null)
+  const [nombreEdit, setNombreEdit] = useState('')
+  const [telefonoEdit, setTelefonoEdit] = useState('')
+  const [guardando, setGuardando] = useState(false)
 
   useEffect(() => {
     cargarAlumnos()
@@ -36,6 +40,43 @@ export default function AlumnosPage() {
     setNombre('')
     setTelefono('')
     setMensaje('✅ Alumno añadido.')
+    cargarAlumnos()
+    setTimeout(() => setMensaje(''), 3000)
+  }
+
+  function iniciarEdicion(a: any) {
+    setEditandoId(a.id)
+    setNombreEdit(a.nombre)
+    setTelefonoEdit(a.telefono || '')
+    setError('')
+  }
+
+  function cancelarEdicion() {
+    setEditandoId(null)
+    setNombreEdit('')
+    setTelefonoEdit('')
+  }
+
+  async function guardarEdicion(id: string) {
+    if (!nombreEdit.trim()) {
+      setError('El nombre no puede estar vacío.')
+      return
+    }
+    setGuardando(true)
+    setError('')
+    const { error: err } = await supabase
+      .from('alumnos')
+      .update({ nombre: nombreEdit.trim(), telefono: telefonoEdit.trim() || null })
+      .eq('id', id)
+    setGuardando(false)
+
+    if (err) {
+      setError('Error al guardar: ' + err.message)
+      return
+    }
+
+    setMensaje('✅ Alumno actualizado.')
+    cancelarEdicion()
     cargarAlumnos()
     setTimeout(() => setMensaje(''), 3000)
   }
@@ -84,11 +125,53 @@ export default function AlumnosPage() {
         <div className="divide-y divide-slate-100">
           {alumnos.length === 0 && <div className="px-6 py-6 text-center text-slate-400">No hay alumnos registrados.</div>}
           {alumnos.map(a => (
-            <div key={a.id} className="px-6 py-3 flex justify-between items-center">
-              <div>
-                <div className="font-medium">{a.nombre}</div>
-                {a.telefono && <div className="text-sm text-slate-500">{a.telefono}</div>}
-              </div>
+            <div key={a.id} className="px-6 py-3">
+              {editandoId === a.id ? (
+                <div className="flex gap-3 items-end flex-wrap">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Nombre</label>
+                    <input
+                      value={nombreEdit}
+                      onChange={e => setNombreEdit(e.target.value)}
+                      className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Teléfono</label>
+                    <input
+                      value={telefonoEdit}
+                      onChange={e => setTelefonoEdit(e.target.value)}
+                      className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm"
+                    />
+                  </div>
+                  <button
+                    onClick={() => guardarEdicion(a.id)}
+                    disabled={guardando}
+                    className="bg-emerald-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-emerald-700 disabled:bg-slate-300 transition"
+                  >
+                    {guardando ? 'Guardando...' : 'Guardar'}
+                  </button>
+                  <button
+                    onClick={cancelarEdicion}
+                    className="bg-slate-100 text-slate-600 text-sm px-3 py-1.5 rounded-lg hover:bg-slate-200 transition"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              ) : (
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className="font-medium">{a.nombre}</div>
+                    {a.telefono && <div className="text-sm text-slate-500">{a.telefono}</div>}
+                  </div>
+                  <button
+                    onClick={() => iniciarEdicion(a)}
+                    className="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1 rounded-lg transition"
+                  >
+                    Editar
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
