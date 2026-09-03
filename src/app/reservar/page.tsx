@@ -33,7 +33,12 @@ function ListaClases() {
       .neq('estado', 'cancelado')
       .order('fecha')
       .order('hora')
-    setSesiones(data || [])
+
+    const conEstado = (data || []).map((s: any) => ({
+      ...s,
+      yaReservada: typeof window !== 'undefined' && !!localStorage.getItem(`reserva_${s.enlace_token}`)
+    }))
+    setSesiones(conEstado)
     setCargando(false)
   }
 
@@ -58,13 +63,21 @@ function ListaClases() {
               <Link
                 key={s.id}
                 href={`/reservar?token=${s.enlace_token}`}
-                className="block bg-white rounded-2xl shadow-lg p-5 hover:shadow-xl transition"
+                className={`block rounded-2xl shadow-lg p-5 transition ${
+                  s.yaReservada
+                    ? 'bg-slate-100 opacity-70'
+                    : 'bg-white hover:shadow-xl'
+                }`}
               >
                 <div className="font-semibold text-slate-800">{s.actividad_nombre}</div>
                 <div className="text-slate-500 text-sm capitalize">{fechaBonita(s.fecha)} — {s.hora?.slice(0,5)}</div>
-                <div className={`text-sm mt-1 font-medium ${s.plazas_libres > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                  {s.plazas_libres > 0 ? `${s.plazas_libres} places lliures` : 'Completa'}
-                </div>
+                {s.yaReservada ? (
+                  <div className="text-sm mt-1 font-medium text-slate-500">✓ Ja reservada</div>
+                ) : (
+                  <div className={`text-sm mt-1 font-medium ${s.plazas_libres > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {s.plazas_libres > 0 ? `${s.plazas_libres} places lliures` : 'Completa'}
+                  </div>
+                )}
               </Link>
             ))}
           </div>
