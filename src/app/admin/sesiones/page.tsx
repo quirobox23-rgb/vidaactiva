@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
+import { fechaLocal } from '@/lib/fecha'
 
 export default function SesionesPage() {
   const [actividades, setActividades] = useState<any[]>([])
@@ -19,7 +20,7 @@ export default function SesionesPage() {
     const hoy = new Date()
     const diaSemana = hoy.getDay() || 7
     const lunes = new Date(hoy.setDate(hoy.getDate() - diaSemana + 1))
-    setSemanaInicio(lunes.toISOString().split('T')[0])
+    setSemanaInicio(fechaLocal(lunes))
   }, [])
 
   async function cargarTodo() {
@@ -71,7 +72,7 @@ export default function SesionesPage() {
       const offset = diasMap[act.dia_semana.toLowerCase()]
       const fechaSesion = new Date(lunes)
       fechaSesion.setDate(lunes.getDate() + offset)
-      const fechaStr = fechaSesion.toISOString().split('T')[0]
+      const fechaStr = fechaLocal(fechaSesion)
 
       const { data: existente } = await supabase.from('sesiones').select('id').eq('actividad_id', act.id).eq('fecha', fechaStr)
       if (existente && existente.length > 0) continue

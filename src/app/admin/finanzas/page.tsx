@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
+import { fechaLocal } from '@/lib/fecha'
 
 type Alumno = {
   id: string
@@ -54,7 +55,7 @@ export default function FinanzasPage() {
   const [metodoPago, setMetodoPago] = useState('Efectivo')
   const [pagadoPago, setPagadoPago] = useState(true)
   const [fechaPago, setFechaPago] = useState(
-    new Date().toISOString().split('T')[0]
+    fechaLocal(new Date())
   )
   const [notasPago, setNotasPago] = useState('')
 
@@ -62,7 +63,7 @@ export default function FinanzasPage() {
   const [categoriaGasto, setCategoriaGasto] = useState('')
   const [montoGasto, setMontoGasto] = useState('')
   const [fechaGasto, setFechaGasto] = useState(
-    new Date().toISOString().split('T')[0]
+    fechaLocal(new Date())
   )
 
   useEffect(() => {
@@ -139,7 +140,7 @@ export default function FinanzasPage() {
     setMontoPago('')
     setMetodoPago('Efectivo')
     setPagadoPago(true)
-    setFechaPago(new Date().toISOString().split('T')[0])
+    setFechaPago(fechaLocal(new Date()))
     setNotasPago('')
 
     await cargarDatos()
@@ -169,7 +170,7 @@ export default function FinanzasPage() {
     setConceptoGasto('')
     setCategoriaGasto('')
     setMontoGasto('')
-    setFechaGasto(new Date().toISOString().split('T')[0])
+    setFechaGasto(fechaLocal(new Date()))
 
     await cargarDatos()
   }

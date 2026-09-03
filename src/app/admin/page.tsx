@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { format, parseISO } from 'date-fns'
 import { ca } from 'date-fns/locale'
+import { fechaLocal } from '@/lib/fecha'
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState({
@@ -21,8 +22,8 @@ export default function AdminDashboard() {
   }, [])
 
   async function cargarDatos() {
-    const hoy = new Date().toISOString().split('T')[0]
-    const inicioMes = new Date().toISOString().slice(0, 7) + '-01'
+    const hoy = fechaLocal(new Date())
+    const inicioMes = hoy.slice(0, 7) + '-01'
 
     const { count: alumnosCount } = await supabase.from('alumnos').select('*', { count: 'exact', head: true })
 
@@ -60,9 +61,25 @@ export default function AdminDashboard() {
     return `https://wa.me/?text=${encodeURIComponent(mensaje)}`
   }
 
+  function generarEnlaceGeneral() {
+    const url = `${typeof window !== 'undefined' ? window.location.origin : ''}/reservar`
+    const mensaje = `Hola! 👋 Consulta i reserva la teva classe aquí: \n\n👉 ${url}`
+    return `https://wa.me/?text=${encodeURIComponent(mensaje)}`
+  }
+
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
+        <a
+          href={generarEnlaceGeneral()}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="bg-emerald-600 text-white text-sm px-4 py-2.5 rounded-lg hover:bg-emerald-700 transition font-medium"
+        >
+          📤 Enviar enlace general (todas las clases)
+        </a>
+      </div>
       
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">

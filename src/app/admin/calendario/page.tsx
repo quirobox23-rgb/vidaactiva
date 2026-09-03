@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
+import { fechaLocal } from '@/lib/fecha'
 
 const DIAS = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo']
 const DIAS_LABEL: Record<string, string> = {
@@ -19,7 +20,7 @@ function lunesDeLaSemana(fecha: Date) {
 }
 
 function formatoFecha(d: Date) {
-  return d.toISOString().split('T')[0]
+  return fechaLocal(d)
 }
 
 export default function CalendarioPage() {

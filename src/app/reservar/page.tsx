@@ -6,18 +6,87 @@ import { supabase } from '@/lib/supabase'
 import { format, parseISO } from 'date-fns'
 import { ca } from 'date-fns/locale'
 import Image from 'next/image'
+import Link from 'next/link'
+import { fechaLocal } from '@/lib/fecha'
+
+function horasHastaSesion(sesion: any) {
+  if (!sesion?.fecha || !sesion?.hora) return null
+  const horaStr = sesion.hora.length === 5 ? sesion.hora + ':00' : sesion.hora
+  const fechaHora = new Date(`${sesion.fecha}T${horaStr}`)
+  return (fechaHora.getTime() - Date.now()) / (1000 * 60 * 60)
+}
+
+function ListaClases() {
+  const [sesiones, setSesiones] = useState<any[]>([])
+  const [cargando, setCargando] = useState(true)
+
+  useEffect(() => {
+    cargarClases()
+  }, [])
+
+  async function cargarClases() {
+    const hoy = fechaLocal(new Date())
+    const { data } = await supabase
+      .from('vista_sesiones')
+      .select('*')
+      .gte('fecha', hoy)
+      .neq('estado', 'cancelado')
+      .order('fecha')
+      .order('hora')
+    setSesiones(data || [])
+    setCargando(false)
+  }
+
+  const fechaBonita = (fecha: string) => format(parseISO(fecha), "EEEE d 'de' MMMM", { locale: ca })
+
+  return (
+    <div className="min-h-screen p-6 bg-slate-100">
+      <div className="max-w-md mx-auto">
+        <div className="text-center mb-6">
+          <Image src="/logopng.png" alt="Vida Activa" width={64} height={64} className="mx-auto mb-3 rounded-lg" />
+          <h1 className="text-2xl font-bold text-slate-800">Classes disponibles</h1>
+          <p className="text-slate-500 text-sm mt-1">Tria la classe on vols reservar</p>
+        </div>
+
+        {cargando ? (
+          <div className="text-center text-slate-400">Carregant...</div>
+        ) : sesiones.length === 0 ? (
+          <div className="text-center text-slate-400 bg-white rounded-2xl p-6">No hi ha classes properes disponibles.</div>
+        ) : (
+          <div className="space-y-3">
+            {sesiones.map((s) => (
+              <Link
+                key={s.id}
+                href={`/reservar?token=${s.enlace_token}`}
+                className="block bg-white rounded-2xl shadow-lg p-5 hover:shadow-xl transition"
+              >
+                <div className="font-semibold text-slate-800">{s.actividad_nombre}</div>
+                <div className="text-slate-500 text-sm capitalize">{fechaBonita(s.fecha)} — {s.hora?.slice(0,5)}</div>
+                <div className={`text-sm mt-1 font-medium ${s.plazas_libres > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {s.plazas_libres > 0 ? `${s.plazas_libres} places lliures` : 'Completa'}
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 function ReservaContent() {
   const searchParams = useSearchParams()
   const token = searchParams.get('token')
-  
+
   const [sesion, setSesion] = useState<any>(null)
   const [alumnos, setAlumnos] = useState<any[]>([])
   const [participantes, setParticipantes] = useState<any[]>([])
   const [nombre, setNombre] = useState('')
   const [telefono, setTelefono] = useState('')
   const [exito, setExito] = useState(false)
+  const [reservaId, setReservaId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [anulando, setAnulando] = useState(false)
 
   useEffect(() => {
     if (token) cargarSesion()
@@ -33,8 +102,14 @@ function ReservaContent() {
     setSesion(data)
     if (data) {
       cargarParticipantes(data.id)
-      if (typeof window !== 'undefined' && localStorage.getItem(`reserva_${token}`)) {
-        setExito(true)
+      if (typeof window !== 'undefined') {
+        const guardado = localStorage.getItem(`reserva_${token}`)
+        if (guardado) {
+          const { nombre: n, reservaId: rid } = JSON.parse(guardado)
+          setNombre(n)
+          setReservaId(rid)
+          setExito(true)
+        }
       }
     }
   }
@@ -73,10 +148,11 @@ function ReservaContent() {
 
     if (sesion.plazas_libres <= 0) return setError('Ho sentim, no queden places disponibles.')
 
-    const { error: errReserva } = await supabase.from('reservas').insert({
-      sesion_id: sesion.id,
-      alumno_id: alumnoId
-    })
+    const { data: novaReserva, error: errReserva } = await supabase
+      .from('reservas')
+      .insert({ sesion_id: sesion.id, alumno_id: alumnoId })
+      .select('id')
+      .single()
 
     if (errReserva) {
       if (errReserva.message.includes('unique')) return setError('Ja tens una reserva en aquesta sessió.')
@@ -84,24 +160,44 @@ function ReservaContent() {
     }
 
     if (typeof window !== 'undefined') {
-      localStorage.setItem(`reserva_${token}`, nombre)
+      localStorage.setItem(`reserva_${token}`, JSON.stringify({ nombre, reservaId: novaReserva.id }))
     }
+    setReservaId(novaReserva.id)
     setExito(true)
     cargarParticipantes(sesion.id)
   }
 
+  async function anularReserva() {
+    if (!reservaId) return
+    if (!confirm('Segur que vols anul·lar la teva reserva?')) return
+
+    setAnulando(true)
+    const { error: errAnular } = await supabase
+      .from('reservas')
+      .update({ estado: 'cancelado' })
+      .eq('id', reservaId)
+
+    setAnulando(false)
+
+    if (errAnular) {
+      setError('Error en anul·lar la reserva.')
+      return
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(`reserva_${token}`)
+    }
+    setExito(false)
+    setReservaId(null)
+    if (sesion) cargarParticipantes(sesion.id)
+  }
+
   const fechaBonita = sesion?.fecha ? format(parseISO(sesion.fecha), "d 'de' MMMM", { locale: ca }) : ''
+  const horasRestantes = horasHastaSesion(sesion)
+  const potAnularse = horasRestantes === null || horasRestantes > 1
 
   if (!token) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-6">
-        <div className="text-center">
-          <Image src="/logopng.png" alt="Vida Activa" width={64} height={64} className="mx-auto mb-4 rounded-lg" />
-          <h1 className="text-2xl font-bold text-slate-800 mb-2">Reservar classe</h1>
-          <p className="text-slate-500">Escaneja el codi o fes servir l'enllaç que t'ha enviat el teu entrenador.</p>
-        </div>
-      </div>
-    )
+    return <ListaClases />
   }
 
   if (exito) {
@@ -114,10 +210,10 @@ function ReservaContent() {
           <p className="text-slate-600 mb-4">
             {sesion?.actividad_nombre} — {sesion?.dia_semana} {fechaBonita} a les {sesion?.hora?.slice(0,5)}
           </p>
-          <p className="text-sm text-slate-400 mb-6">T'esperem. No faltis!</p>
+          <p className="text-sm text-slate-400 mb-6">T&apos;esperem. No faltis!</p>
 
           {participantes.length > 0 && (
-            <div className="text-left bg-slate-50 rounded-xl p-4">
+            <div className="text-left bg-slate-50 rounded-xl p-4 mb-6">
               <div className="text-sm font-semibold text-slate-700 mb-2">
                 Participants ({participantes.length})
               </div>
@@ -128,6 +224,33 @@ function ReservaContent() {
               </div>
             </div>
           )}
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-lg text-sm">{error}</div>
+          )}
+
+          <div className="space-y-2">
+            {potAnularse ? (
+              <button
+                onClick={anularReserva}
+                disabled={anulando}
+                className="w-full bg-red-50 text-red-600 py-2.5 rounded-xl font-medium hover:bg-red-100 transition disabled:opacity-50"
+              >
+                {anulando ? 'Anul·lant...' : 'Anul·lar reserva'}
+              </button>
+            ) : (
+              <p className="text-xs text-slate-400">
+                Ja no es pot anul·lar (falta menys d&apos;una hora per a la classe)
+              </p>
+            )}
+
+            <Link
+              href="/reservar"
+              className="block w-full bg-slate-100 text-slate-600 py-2.5 rounded-xl font-medium hover:bg-slate-200 transition"
+            >
+              Veure altres classes
+            </Link>
+          </div>
         </div>
       </div>
     )
@@ -138,14 +261,14 @@ function ReservaContent() {
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
         <Image src="/logopng.png" alt="Vida Activa" width={56} height={56} className="mb-3 rounded-lg" />
         <h1 className="text-2xl font-bold text-slate-800 mb-1">Reservar plaça</h1>
-        
+
         {sesion ? (
           <div className="mb-4 p-4 bg-blue-50 rounded-xl">
             <div className="font-semibold text-blue-800">{sesion.actividad_nombre}</div>
             <div className="text-blue-600">{sesion.dia_semana} {fechaBonita} — {sesion.hora?.slice(0,5)}</div>
             <div className="text-sm text-blue-500 mt-1">
-              {sesion.plazas_libres > 0 
-                ? `Queden ${sesion.plazas_libres} places disponibles` 
+              {sesion.plazas_libres > 0
+                ? `Queden ${sesion.plazas_libres} places disponibles`
                 : '⚠️ No queden places'}
             </div>
           </div>
@@ -205,6 +328,10 @@ function ReservaContent() {
             {sesion?.plazas_libres <= 0 ? 'Sense places disponibles' : 'Confirmar reserva'}
           </button>
         </form>
+
+        <Link href="/reservar" className="block text-center text-sm text-slate-400 mt-4 hover:underline">
+          Veure totes les classes disponibles
+        </Link>
       </div>
     </div>
   )
