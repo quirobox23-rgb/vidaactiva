@@ -34,10 +34,42 @@ function ListaClases() {
       .order('fecha')
       .order('hora')
 
-    const conEstado = (data || []).map((s: any) => ({
-      ...s,
-      yaReservada: typeof window !== 'undefined' && !!localStorage.getItem(`reserva_${s.enlace_token}`)
-    }))
+    const lista = data || []
+
+    const guardadas: Record<string, string> = {}
+    if (typeof window !== 'undefined') {
+      for (const s of lista) {
+        const raw = localStorage.getItem(`reserva_${s.enlace_token}`)
+        if (raw) {
+          try {
+            const { reservaId } = JSON.parse(raw)
+            if (reservaId) guardadas[s.enlace_token] = reservaId
+          } catch {}
+        }
+      }
+    }
+
+    const ids = Object.values(guardadas)
+    let activasIds = new Set<string>()
+    if (ids.length > 0) {
+      const { data: reservasReales } = await supabase
+        .from('reservas')
+        .select('id, estado')
+        .in('id', ids)
+      activasIds = new Set(
+        (reservasReales || []).filter(r => r.estado !== 'cancelado').map(r => r.id)
+      )
+    }
+
+    const conEstado = lista.map((s: any) => {
+      const rid = guardadas[s.enlace_token]
+      const yaReservada = !!rid && activasIds.has(rid)
+      if (rid && !yaReservada && typeof window !== 'undefined') {
+        localStorage.removeItem(`reserva_${s.enlace_token}`)
+      }
+      return { ...s, yaReservada }
+    })
+
     setSesiones(conEstado)
     setCargando(false)
   }
@@ -119,9 +151,19 @@ function ReservaContent() {
         const guardado = localStorage.getItem(`reserva_${token}`)
         if (guardado) {
           const { nombre: n, reservaId: rid } = JSON.parse(guardado)
-          setNombre(n)
-          setReservaId(rid)
-          setExito(true)
+          const { data: reservaActual } = await supabase
+            .from('reservas')
+            .select('estado')
+            .eq('id', rid)
+            .maybeSingle()
+
+          if (reservaActual && reservaActual.estado !== 'cancelado') {
+            setNombre(n)
+            setReservaId(rid)
+            setExito(true)
+          } else {
+            localStorage.removeItem(`reserva_${token}`)
+          }
         }
       }
     }
@@ -161,21 +203,45 @@ function ReservaContent() {
 
     if (sesion.plazas_libres <= 0) return setError('Ho sentim, no queden places disponibles.')
 
-    const { data: novaReserva, error: errReserva } = await supabase
+    const { data: reservaExistente } = await supabase
       .from('reservas')
-      .insert({ sesion_id: sesion.id, alumno_id: alumnoId })
-      .select('id')
-      .single()
+      .select('id, estado')
+      .eq('sesion_id', sesion.id)
+      .eq('alumno_id', alumnoId)
+      .maybeSingle()
 
-    if (errReserva) {
-      if (errReserva.message.includes('unique')) return setError('Ja tens una reserva en aquesta sessió.')
-      return setError('Error en reservar. Torna-ho a provar.')
+    let reservaFinalId: string
+
+    if (reservaExistente) {
+      if (reservaExistente.estado !== 'cancelado') {
+        return setError('Ja tens una reserva en aquesta sessió.')
+      }
+      const { data: reactivada, error: errReactivar } = await supabase
+        .from('reservas')
+        .update({ estado: 'reservado' })
+        .eq('id', reservaExistente.id)
+        .select('id')
+        .single()
+      if (errReactivar) return setError('Error en reservar. Torna-ho a provar.')
+      reservaFinalId = reactivada.id
+    } else {
+      const { data: novaReserva, error: errReserva } = await supabase
+        .from('reservas')
+        .insert({ sesion_id: sesion.id, alumno_id: alumnoId })
+        .select('id')
+        .single()
+
+      if (errReserva) {
+        if (errReserva.message.includes('unique')) return setError('Ja tens una reserva en aquesta sessió.')
+        return setError('Error en reservar. Torna-ho a provar.')
+      }
+      reservaFinalId = novaReserva.id
     }
 
     if (typeof window !== 'undefined') {
-      localStorage.setItem(`reserva_${token}`, JSON.stringify({ nombre, reservaId: novaReserva.id }))
+      localStorage.setItem(`reserva_${token}`, JSON.stringify({ nombre, reservaId: reservaFinalId }))
     }
-    setReservaId(novaReserva.id)
+    setReservaId(reservaFinalId)
     setExito(true)
     cargarParticipantes(sesion.id)
   }
