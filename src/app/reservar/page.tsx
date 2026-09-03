@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { format, parseISO } from 'date-fns'
 import { ca } from 'date-fns/locale'
+import Image from 'next/image'
 
 function ReservaContent() {
   const searchParams = useSearchParams()
@@ -30,7 +31,12 @@ function ReservaContent() {
       .eq('enlace_token', token)
       .single()
     setSesion(data)
-    if (data) cargarParticipantes(data.id)
+    if (data) {
+      cargarParticipantes(data.id)
+      if (typeof window !== 'undefined' && localStorage.getItem(`reserva_${token}`)) {
+        setExito(true)
+      }
+    }
   }
 
   async function cargarParticipantes(sesionId: string) {
@@ -77,6 +83,9 @@ function ReservaContent() {
       return setError('Error en reservar. Torna-ho a provar.')
     }
 
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(`reserva_${token}`, nombre)
+    }
     setExito(true)
     cargarParticipantes(sesion.id)
   }
@@ -87,6 +96,7 @@ function ReservaContent() {
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
         <div className="text-center">
+          <Image src="/logopng.png" alt="Vida Activa" width={64} height={64} className="mx-auto mb-4 rounded-lg" />
           <h1 className="text-2xl font-bold text-slate-800 mb-2">Reservar classe</h1>
           <p className="text-slate-500">Escaneja el codi o fes servir l'enllaç que t'ha enviat el teu entrenador.</p>
         </div>
@@ -98,6 +108,7 @@ function ReservaContent() {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-emerald-50">
         <div className="bg-white p-8 rounded-2xl shadow-lg text-center max-w-md">
+          <Image src="/logopng.png" alt="Vida Activa" width={56} height={56} className="mx-auto mb-3 rounded-lg" />
           <div className="text-5xl mb-4">✅</div>
           <h2 className="text-2xl font-bold text-emerald-700 mb-2">Reserva confirmada!</h2>
           <p className="text-slate-600 mb-4">
@@ -125,6 +136,7 @@ function ReservaContent() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-slate-100">
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
+        <Image src="/logopng.png" alt="Vida Activa" width={56} height={56} className="mb-3 rounded-lg" />
         <h1 className="text-2xl font-bold text-slate-800 mb-1">Reservar plaça</h1>
         
         {sesion ? (
