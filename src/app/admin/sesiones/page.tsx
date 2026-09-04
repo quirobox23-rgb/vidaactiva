@@ -14,6 +14,10 @@ export default function SesionesPage() {
   const [cargando, setCargando] = useState(false)
   const [mensaje, setMensaje] = useState('')
   const [error, setError] = useState('')
+  const [editandoSesionId, setEditandoSesionId] = useState<string | null>(null)
+  const [actividadEdit, setActividadEdit] = useState('')
+  const [fechaEdit, setFechaEdit] = useState('')
+  const [guardandoSesion, setGuardandoSesion] = useState(false)
 
   useEffect(() => {
     cargarTodo()
@@ -98,6 +102,66 @@ export default function SesionesPage() {
     e.currentTarget.reset()
   }
 
+  function iniciarEdicionSesion(s: any) {
+    const coincide = actividades.find(a =>
+      a.nombre === s.actividad_nombre && a.dia_semana === s.dia_semana && a.hora === s.hora
+    )
+    setEditandoSesionId(s.id)
+    setActividadEdit(coincide ? coincide.id : '')
+    setFechaEdit(s.fecha)
+    setMensaje('')
+    setError('')
+    if (sesionSeleccionada === s.id) setSesionSeleccionada(null)
+  }
+
+  function cancelarEdicionSesion() {
+    setEditandoSesionId(null)
+    setActividadEdit('')
+    setFechaEdit('')
+  }
+
+  async function guardarEdicionSesion(id: string) {
+    if (!actividadEdit || !fechaEdit) {
+      setError('Selecciona actividad y fecha.')
+      return
+    }
+    setGuardandoSesion(true)
+    setError('')
+    const { error: err } = await supabase
+      .from('sesiones')
+      .update({ actividad_id: actividadEdit, fecha: fechaEdit })
+      .eq('id', id)
+    setGuardandoSesion(false)
+
+    if (err) {
+      setError('Error al guardar: ' + err.message)
+      return
+    }
+
+    setMensaje('✅ Sesión actualizada.')
+    cancelarEdicionSesion()
+    cargarSesiones()
+  }
+
+  async function eliminarSesion(id: string, reservasCount: number) {
+    const aviso = reservasCount > 0
+      ? `Esta sesión tiene ${reservasCount} reserva(s). Si la eliminas, esas reservas se perderán. ¿Seguro que quieres eliminarla?`
+      : '¿Seguro que quieres eliminar esta sesión?'
+    if (!confirm(aviso)) return
+
+    setError('')
+    const { error: err } = await supabase.from('sesiones').delete().eq('id', id)
+
+    if (err) {
+      setError('Error al eliminar: ' + err.message)
+      return
+    }
+
+    setMensaje('✅ Sesión eliminada.')
+    if (sesionSeleccionada === id) setSesionSeleccionada(null)
+    cargarSesiones()
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
@@ -153,20 +217,66 @@ export default function SesionesPage() {
           {sesiones.length === 0 && <div className="px-6 py-8 text-center text-slate-400">No hay sesiones.</div>}
           {sesiones.map(s => (
             <div key={s.id} className="px-6 py-4">
-              <div className="flex justify-between items-center mb-2">
-                <div>
-                  <span className="font-medium text-slate-800">{s.actividad_nombre}</span>
-                  <span className="text-slate-400 mx-2">•</span>
-                  <span className="text-slate-600">{s.dia_semana} {s.fecha} {s.hora?.slice(0,5)}</span>
-                  <span className={`ml-2 text-xs px-2 py-0.5 rounded-full font-medium ${s.tipo === 'fija' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{s.tipo}</span>
-                </div>
-                <div className="flex gap-2 items-center">
-                  <span className="text-sm text-slate-500">{s.reservas_count || 0}/{s.cupo_maximo} reservas</span>
-                  <button onClick={() => verReservas(s.id)} className="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1 rounded-lg transition">
-                    {sesionSeleccionada === s.id ? 'Ocultar' : 'Ver reservas'}
+              {editandoSesionId === s.id ? (
+                <div className="flex gap-3 items-end flex-wrap bg-slate-50 -mx-2 px-2 py-3 rounded-lg">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Actividad</label>
+                    <select
+                      value={actividadEdit}
+                      onChange={e => setActividadEdit(e.target.value)}
+                      className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white min-w-[220px]"
+                    >
+                      <option value="">Selecciona...</option>
+                      {actividades.map(a => (
+                        <option key={a.id} value={a.id}>{a.dia_semana} {a.hora?.slice(0,5)} — {a.nombre}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Fecha</label>
+                    <input
+                      type="date"
+                      value={fechaEdit}
+                      onChange={e => setFechaEdit(e.target.value)}
+                      className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white"
+                    />
+                  </div>
+                  <button
+                    onClick={() => guardarEdicionSesion(s.id)}
+                    disabled={guardandoSesion}
+                    className="bg-emerald-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-emerald-700 disabled:bg-slate-300 transition"
+                  >
+                    {guardandoSesion ? 'Guardando...' : 'Guardar'}
+                  </button>
+                  <button
+                    onClick={cancelarEdicionSesion}
+                    className="bg-slate-100 text-slate-600 text-sm px-3 py-1.5 rounded-lg hover:bg-slate-200 transition"
+                  >
+                    Cancelar
                   </button>
                 </div>
-              </div>
+              ) : (
+                <div className="flex justify-between items-center mb-2">
+                  <div>
+                    <span className="font-medium text-slate-800">{s.actividad_nombre}</span>
+                    <span className="text-slate-400 mx-2">•</span>
+                    <span className="text-slate-600">{s.dia_semana} {s.fecha} {s.hora?.slice(0,5)}</span>
+                    <span className={`ml-2 text-xs px-2 py-0.5 rounded-full font-medium ${s.tipo === 'fija' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{s.tipo}</span>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <span className="text-sm text-slate-500">{s.reservas_count || 0}/{s.cupo_maximo} reservas</span>
+                    <button onClick={() => iniciarEdicionSesion(s)} className="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1 rounded-lg transition">
+                      Editar
+                    </button>
+                    <button onClick={() => eliminarSesion(s.id, s.reservas_count || 0)} className="text-sm bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1 rounded-lg transition">
+                      Eliminar
+                    </button>
+                    <button onClick={() => verReservas(s.id)} className="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1 rounded-lg transition">
+                      {sesionSeleccionada === s.id ? 'Ocultar' : 'Ver reservas'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Panel de reservas de esta sesión */}
               {sesionSeleccionada === s.id && (
