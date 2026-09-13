@@ -191,12 +191,13 @@ function ReservaContent() {
     if (!sesion) return setError('Sessió no trobada')
 
     let alumnoId: string
-    const { data: existente } = await supabase.from('alumnos').select('id').eq('nombre', nombre).single()
+    const { data: existentes } = await supabase.from('alumnos').select('id').eq('nombre', nombre).limit(1)
+    const existente = existentes && existentes.length > 0 ? existentes[0] : null
 
     if (existente) {
       alumnoId = existente.id
     } else {
-      const { data: nuevo, error: err } = await supabase.from('alumnos').insert({ nombre, telefono }).select('id').single()
+      const { data: nuevo, error: err } = await supabase.from('alumnos').insert({ nombre, telefono, origen: 'reserva' }).select('id').single()
       if (err) return setError('Error en crear l\'alumne')
       alumnoId = nuevo!.id
     }
