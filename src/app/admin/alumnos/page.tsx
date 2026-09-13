@@ -1,430 +1,218 @@
 'use client'
 
-import { useEffect, useState, Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { format, parseISO } from 'date-fns'
-import { ca } from 'date-fns/locale'
-import Image from 'next/image'
 import Link from 'next/link'
-import { fechaLocal } from '@/lib/fecha'
 
-function horasHastaSesion(sesion: any) {
-  if (!sesion?.fecha || !sesion?.hora) return null
-  const horaStr = sesion.hora.length === 5 ? sesion.hora + ':00' : sesion.hora
-  const fechaHora = new Date(`${sesion.fecha}T${horaStr}`)
-  return (fechaHora.getTime() - Date.now()) / (1000 * 60 * 60)
-}
-
-function ListaClases() {
-  const [sesiones, setSesiones] = useState<any[]>([])
-  const [cargando, setCargando] = useState(true)
-
-  useEffect(() => {
-    cargarClases()
-  }, [])
-
-  async function cargarClases() {
-    const hoy = fechaLocal(new Date())
-    const { data } = await supabase
-      .from('vista_sesiones')
-      .select('*')
-      .gte('fecha', hoy)
-      .neq('estado', 'cancelado')
-      .order('fecha')
-      .order('hora')
-
-    const lista = data || []
-
-    const guardadas: Record<string, string> = {}
-    if (typeof window !== 'undefined') {
-      for (const s of lista) {
-        const raw = localStorage.getItem(`reserva_${s.enlace_token}`)
-        if (raw) {
-          try {
-            const { reservaId } = JSON.parse(raw)
-            if (reservaId) guardadas[s.enlace_token] = reservaId
-          } catch {}
-        }
-      }
-    }
-
-    const ids = Object.values(guardadas)
-    let activasIds = new Set<string>()
-    if (ids.length > 0) {
-      const { data: reservasReales } = await supabase
-        .from('reservas')
-        .select('id, estado')
-        .in('id', ids)
-      activasIds = new Set(
-        (reservasReales || []).filter(r => r.estado !== 'cancelado').map(r => r.id)
-      )
-    }
-
-    const conEstado = lista.map((s: any) => {
-      const rid = guardadas[s.enlace_token]
-      const yaReservada = !!rid && activasIds.has(rid)
-      if (rid && !yaReservada && typeof window !== 'undefined') {
-        localStorage.removeItem(`reserva_${s.enlace_token}`)
-      }
-      return { ...s, yaReservada }
-    })
-
-    setSesiones(conEstado)
-    setCargando(false)
-  }
-
-  const fechaBonita = (fecha: string) => format(parseISO(fecha), "EEEE d 'de' MMMM", { locale: ca })
-
-  return (
-    <div className="min-h-screen p-6 bg-slate-100">
-      <div className="max-w-md mx-auto">
-        <div className="text-center mb-6">
-          <Image src="/logopng.png" alt="Vida Activa" width={64} height={64} className="mx-auto mb-3 rounded-lg" />
-          <h1 className="text-2xl font-bold text-slate-800">Classes disponibles</h1>
-          <p className="text-slate-500 text-sm mt-1">Tria la classe on vols reservar</p>
-        </div>
-
-        {cargando ? (
-          <div className="text-center text-slate-400">Carregant...</div>
-        ) : sesiones.length === 0 ? (
-          <div className="text-center text-slate-400 bg-white rounded-2xl p-6">No hi ha classes properes disponibles.</div>
-        ) : (
-          <div className="space-y-3">
-            {sesiones.map((s) => (
-              <Link
-                key={s.id}
-                href={`/reservar?token=${s.enlace_token}`}
-                className={`block rounded-2xl shadow-lg p-5 transition ${
-                  s.yaReservada
-                    ? 'bg-slate-100 opacity-70'
-                    : 'bg-white hover:shadow-xl'
-                }`}
-              >
-                <div className="font-semibold text-slate-800">{s.actividad_nombre}</div>
-                <div className="text-slate-500 text-sm capitalize">{fechaBonita(s.fecha)} — {s.hora?.slice(0,5)}</div>
-                {s.yaReservada ? (
-                  <div className="text-sm mt-1 font-medium text-slate-500">✓ Ja reservada</div>
-                ) : (
-                  <div className={`text-sm mt-1 font-medium ${s.plazas_libres > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {s.plazas_libres > 0 ? `${s.plazas_libres} places lliures` : 'Completa'}
-                  </div>
-                )}
-              </Link>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function ReservaContent() {
-  const searchParams = useSearchParams()
-  const token = searchParams.get('token')
-
-  const [sesion, setSesion] = useState<any>(null)
+export default function AlumnosPage() {
   const [alumnos, setAlumnos] = useState<any[]>([])
-  const [participantes, setParticipantes] = useState<any[]>([])
   const [nombre, setNombre] = useState('')
   const [telefono, setTelefono] = useState('')
-  const [exito, setExito] = useState(false)
-  const [reservaId, setReservaId] = useState<string | null>(null)
+  const [mensaje, setMensaje] = useState('')
   const [error, setError] = useState('')
-  const [anulando, setAnulando] = useState(false)
+  const [editandoId, setEditandoId] = useState<string | null>(null)
+  const [nombreEdit, setNombreEdit] = useState('')
+  const [telefonoEdit, setTelefonoEdit] = useState('')
+  const [guardando, setGuardando] = useState(false)
 
   useEffect(() => {
-    if (token) cargarSesion()
     cargarAlumnos()
-  }, [token])
-
-  async function cargarSesion() {
-    const { data } = await supabase
-      .from('vista_sesiones')
-      .select('*')
-      .eq('enlace_token', token)
-      .single()
-    setSesion(data)
-    if (data) {
-      cargarParticipantes(data.id)
-      if (typeof window !== 'undefined') {
-        const guardado = localStorage.getItem(`reserva_${token}`)
-        if (guardado) {
-          const { nombre: n, reservaId: rid } = JSON.parse(guardado)
-          const { data: reservaActual } = await supabase
-            .from('reservas')
-            .select('estado')
-            .eq('id', rid)
-            .maybeSingle()
-
-          if (reservaActual && reservaActual.estado !== 'cancelado') {
-            setNombre(n)
-            setReservaId(rid)
-            setExito(true)
-          } else {
-            localStorage.removeItem(`reserva_${token}`)
-          }
-        }
-      }
-    }
-  }
-
-  async function cargarParticipantes(sesionId: string) {
-    const { data } = await supabase
-      .from('vista_reservas')
-      .select('*')
-      .eq('sesion_id', sesionId)
-      .neq('estado', 'cancelado')
-      .order('fecha_reserva')
-    setParticipantes(data || [])
-  }
+  }, [])
 
   async function cargarAlumnos() {
-    const { data } = await supabase.from('alumnos').select('*').order('nombre')
+    setError('')
+    const { data, error: err } = await supabase
+      .from('alumnos')
+      .select('*')
+      .or('origen.is.null,origen.eq.manual')
+      .order('nombre')
+    if (err) {
+      setError('Error: ' + err.message)
+      return
+    }
     setAlumnos(data || [])
   }
 
-  async function reservar(e: React.FormEvent) {
+  async function agregarAlumno(e: React.FormEvent) {
     e.preventDefault()
     setError('')
-
-    if (!sesion) return setError('Sessió no trobada')
-
-    let alumnoId: string
-    const { data: existentes } = await supabase.from('alumnos').select('id').eq('nombre', nombre).limit(1)
-    const existente = existentes && existentes.length > 0 ? existentes[0] : null
-
-    if (existente) {
-      alumnoId = existente.id
-    } else {
-      const { data: nuevo, error: err } = await supabase.from('alumnos').insert({ nombre, telefono, origen: 'reserva' }).select('id').single()
-      if (err) return setError('Error en crear l\'alumne')
-      alumnoId = nuevo!.id
+    const { error: err } = await supabase.from('alumnos').insert({ nombre, telefono, origen: 'manual' })
+    if (err) {
+      setError('Error al añadir: ' + err.message)
+      return
     }
-
-    if (sesion.plazas_libres <= 0) return setError('Ho sentim, no queden places disponibles.')
-
-    const { data: reservaExistente } = await supabase
-      .from('reservas')
-      .select('id, estado')
-      .eq('sesion_id', sesion.id)
-      .eq('alumno_id', alumnoId)
-      .maybeSingle()
-
-    let reservaFinalId: string
-
-    if (reservaExistente) {
-      if (reservaExistente.estado !== 'cancelado') {
-        return setError('Ja tens una reserva en aquesta sessió.')
-      }
-      const { data: reactivada, error: errReactivar } = await supabase
-        .from('reservas')
-        .update({ estado: 'reservado' })
-        .eq('id', reservaExistente.id)
-        .select('id')
-        .single()
-      if (errReactivar) return setError('Error en reservar. Torna-ho a provar.')
-      reservaFinalId = reactivada.id
-    } else {
-      const { data: novaReserva, error: errReserva } = await supabase
-        .from('reservas')
-        .insert({ sesion_id: sesion.id, alumno_id: alumnoId })
-        .select('id')
-        .single()
-
-      if (errReserva) {
-        if (errReserva.message.includes('unique')) return setError('Ja tens una reserva en aquesta sessió.')
-        return setError('Error en reservar. Torna-ho a provar.')
-      }
-      reservaFinalId = novaReserva.id
-    }
-
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(`reserva_${token}`, JSON.stringify({ nombre, reservaId: reservaFinalId }))
-    }
-    setReservaId(reservaFinalId)
-    setExito(true)
-    cargarParticipantes(sesion.id)
+    setNombre('')
+    setTelefono('')
+    setMensaje('✅ Alumno añadido.')
+    cargarAlumnos()
+    setTimeout(() => setMensaje(''), 3000)
   }
 
-  async function anularReserva() {
-    if (!reservaId) return
-    if (!confirm('Segur que vols anul·lar la teva reserva?')) return
+  function iniciarEdicion(a: any) {
+    setEditandoId(a.id)
+    setNombreEdit(a.nombre)
+    setTelefonoEdit(a.telefono || '')
+    setError('')
+  }
 
-    setAnulando(true)
-    const { error: errAnular } = await supabase
-      .from('reservas')
-      .update({ estado: 'cancelado' })
-      .eq('id', reservaId)
+  function cancelarEdicion() {
+    setEditandoId(null)
+    setNombreEdit('')
+    setTelefonoEdit('')
+  }
 
-    setAnulando(false)
+  async function guardarEdicion(id: string) {
+    if (!nombreEdit.trim()) {
+      setError('El nombre no puede estar vacío.')
+      return
+    }
+    setGuardando(true)
+    setError('')
+    const { error: err } = await supabase
+      .from('alumnos')
+      .update({ nombre: nombreEdit.trim(), telefono: telefonoEdit.trim() || null })
+      .eq('id', id)
+    setGuardando(false)
 
-    if (errAnular) {
-      setError('Error en anul·lar la reserva.')
+    if (err) {
+      setError('Error al guardar: ' + err.message)
       return
     }
 
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem(`reserva_${token}`)
+    setMensaje('✅ Alumno actualizado.')
+    cancelarEdicion()
+    cargarAlumnos()
+    setTimeout(() => setMensaje(''), 3000)
+  }
+
+  const [eliminando, setEliminando] = useState<string | null>(null)
+
+  async function eliminarAlumno(id: string, nombreAlumno: string) {
+    if (!confirm(`¿Seguro que quieres eliminar a "${nombreAlumno}"?`)) return
+
+    setEliminando(id)
+    setError('')
+    const { error: err } = await supabase.from('alumnos').delete().eq('id', id)
+    setEliminando(null)
+
+    if (err) {
+      if (err.message.includes('foreign key') || err.code === '23503') {
+        setError(`No se puede eliminar a "${nombreAlumno}" porque tiene reservas y/o pagos registrados. Si de verdad quieres borrarlo, primero tendrías que quitar sus reservas (en Sesiones) y sus pagos (en Finanzas).`)
+      } else {
+        setError('Error al eliminar: ' + err.message)
+      }
+      return
     }
-    setExito(false)
-    setReservaId(null)
-    if (sesion) cargarParticipantes(sesion.id)
-  }
 
-  const fechaBonita = sesion?.fecha ? format(parseISO(sesion.fecha), "d 'de' MMMM", { locale: ca }) : ''
-  const horasRestantes = horasHastaSesion(sesion)
-  const potAnularse = horasRestantes === null || horasRestantes > 1
-
-  if (!token) {
-    return <ListaClases />
-  }
-
-  if (exito) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-emerald-50">
-        <div className="bg-white p-8 rounded-2xl shadow-lg text-center max-w-md">
-          <Image src="/logopng.png" alt="Vida Activa" width={56} height={56} className="mx-auto mb-3 rounded-lg" />
-          <div className="text-5xl mb-4">✅</div>
-          <h2 className="text-2xl font-bold text-emerald-700 mb-2">Reserva confirmada!</h2>
-          <p className="text-slate-600 mb-4">
-            {sesion?.actividad_nombre} — {sesion?.dia_semana} {fechaBonita} a les {sesion?.hora?.slice(0,5)}
-          </p>
-          <p className="text-sm text-slate-400 mb-6">T&apos;esperem. No faltis!</p>
-
-          {participantes.length > 0 && (
-            <div className="text-left bg-slate-50 rounded-xl p-4 mb-6">
-              <div className="text-sm font-semibold text-slate-700 mb-2">
-                Participants ({participantes.length})
-              </div>
-              <div className="text-sm text-slate-600 space-y-1">
-                {participantes.map((p) => (
-                  <div key={p.id}>{p.alumno_nombre}</div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {error && (
-            <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-lg text-sm">{error}</div>
-          )}
-
-          <div className="space-y-2">
-            {potAnularse ? (
-              <button
-                onClick={anularReserva}
-                disabled={anulando}
-                className="w-full bg-red-50 text-red-600 py-2.5 rounded-xl font-medium hover:bg-red-100 transition disabled:opacity-50"
-              >
-                {anulando ? 'Anul·lant...' : 'Anul·lar reserva'}
-              </button>
-            ) : (
-              <p className="text-xs text-slate-400">
-                Ja no es pot anul·lar (falta menys d&apos;una hora per a la classe)
-              </p>
-            )}
-
-            <Link
-              href="/reservar"
-              className="block w-full bg-slate-100 text-slate-600 py-2.5 rounded-xl font-medium hover:bg-slate-200 transition"
-            >
-              Veure altres classes
-            </Link>
-          </div>
-        </div>
-      </div>
-    )
+    setMensaje('✅ Alumno eliminado.')
+    cargarAlumnos()
+    setTimeout(() => setMensaje(''), 3000)
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-slate-100">
-      <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
-        <Image src="/logopng.png" alt="Vida Activa" width={56} height={56} className="mb-3 rounded-lg" />
-        <h1 className="text-2xl font-bold text-slate-800 mb-1">Reservar plaça</h1>
+    <div className="space-y-6">
+      <div className="flex items-center gap-4">
+        <Link href="/admin" className="text-slate-500 hover:text-pink-600 text-sm">← Volver al Dashboard</Link>
+      </div>
 
-        {sesion ? (
-          <div className="mb-4 p-4 bg-blue-50 rounded-xl">
-            <div className="font-semibold text-blue-800">{sesion.actividad_nombre}</div>
-            <div className="text-blue-600">{sesion.dia_semana} {fechaBonita} — {sesion.hora?.slice(0,5)}</div>
-            <div className="text-sm text-blue-500 mt-1">
-              {sesion.plazas_libres > 0
-                ? `Queden ${sesion.plazas_libres} places disponibles`
-                : '⚠️ No queden places'}
-            </div>
-          </div>
-        ) : (
-          <div className="mb-6 text-slate-400">Carregant sessió...</div>
-        )}
+      <h1 className="text-2xl font-bold text-slate-800">Alumnos</h1>
 
-        {participantes.length > 0 && (
-          <div className="mb-6 bg-slate-50 rounded-xl p-4">
-            <div className="text-sm font-semibold text-slate-700 mb-2">
-              Participants ({participantes.length})
-            </div>
-            <div className="text-sm text-slate-600 space-y-1">
-              {participantes.map((p) => (
-                <div key={p.id}>{p.alumno_nombre}</div>
-              ))}
-            </div>
-          </div>
-        )}
+      {mensaje && <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl">{mensaje}</div>}
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl">{error}</div>}
 
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-lg text-sm">{error}</div>
-        )}
-
-        <form onSubmit={reservar} className="space-y-4">
+      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <h2 className="font-semibold mb-4">➕ Añadir alumno</h2>
+        <form onSubmit={agregarAlumno} className="flex gap-4 items-end flex-wrap">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">El teu nom</label>
-            <input
-              list="alumnos-list"
-              value={nombre}
+            <label className="block text-sm text-slate-500 mb-1">Nombre</label>
+            <input 
+              value={nombre} 
               onChange={e => setNombre(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              placeholder="Ex: Maria Garcia"
-              required
+              className="border border-slate-300 rounded-lg px-3 py-2" 
+              required 
             />
-            <datalist id="alumnos-list">
-              {alumnos.map(a => <option key={a.id} value={a.nombre} />)}
-            </datalist>
           </div>
-
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Telèfon (opcional)</label>
-            <input
-              type="tel"
-              value={telefono}
+            <label className="block text-sm text-slate-500 mb-1">Teléfono</label>
+            <input 
+              value={telefono} 
               onChange={e => setTelefono(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              placeholder="612 345 678"
+              className="border border-slate-300 rounded-lg px-3 py-2" 
             />
           </div>
-
-          <button
-            type="submit"
-            disabled={!sesion || sesion.plazas_libres <= 0}
-            className="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition"
-          >
-            {sesion?.plazas_libres <= 0 ? 'Sense places disponibles' : 'Confirmar reserva'}
+          <button type="submit" className="bg-pink-600 text-white px-6 py-2 rounded-lg hover:bg-pink-700 font-medium">
+            Añadir
           </button>
         </form>
+      </div>
 
-        <Link href="/reservar" className="block text-center text-sm text-slate-400 mt-4 hover:underline">
-          Veure totes les classes disponibles
-        </Link>
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+        <div className="px-6 py-4 border-b border-slate-100">
+          <h2 className="font-semibold">Lista de alumnos ({alumnos.length})</h2>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {alumnos.length === 0 && <div className="px-6 py-6 text-center text-slate-400">No hay alumnos registrados.</div>}
+          {alumnos.map(a => (
+            <div key={a.id} className="px-6 py-3">
+              {editandoId === a.id ? (
+                <div className="flex gap-3 items-end flex-wrap">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Nombre</label>
+                    <input
+                      value={nombreEdit}
+                      onChange={e => setNombreEdit(e.target.value)}
+                      className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Teléfono</label>
+                    <input
+                      value={telefonoEdit}
+                      onChange={e => setTelefonoEdit(e.target.value)}
+                      className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm"
+                    />
+                  </div>
+                  <button
+                    onClick={() => guardarEdicion(a.id)}
+                    disabled={guardando}
+                    className="bg-emerald-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-emerald-700 disabled:bg-slate-300 transition"
+                  >
+                    {guardando ? 'Guardando...' : 'Guardar'}
+                  </button>
+                  <button
+                    onClick={cancelarEdicion}
+                    className="bg-slate-100 text-slate-600 text-sm px-3 py-1.5 rounded-lg hover:bg-slate-200 transition"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              ) : (
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className="font-medium">{a.nombre}</div>
+                    {a.telefono && <div className="text-sm text-slate-500">{a.telefono}</div>}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => iniciarEdicion(a)}
+                      className="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1 rounded-lg transition"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      onClick={() => eliminarAlumno(a.id, a.nombre)}
+                      disabled={eliminando === a.id}
+                      className="text-sm bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1 rounded-lg transition disabled:opacity-50"
+                    >
+                      {eliminando === a.id ? 'Eliminando...' : 'Eliminar'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
-  )
-}
-
-export default function ReservarPage() {
-  return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-slate-400">Carregant...</div>
-      </div>
-    }>
-      <ReservaContent />
-    </Suspense>
   )
 }
