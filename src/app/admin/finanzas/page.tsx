@@ -41,11 +41,18 @@ type Gasto = {
   fecha: string
 }
 
+type ReservaMes = {
+  alumno_id: string
+  estado: string
+  alumno_nombre: string
+}
+
 export default function FinanzasPage() {
   const [pagos, setPagos] = useState<Pago[]>([])
   const [gastos, setGastos] = useState<Gasto[]>([])
   const [alumnos, setAlumnos] = useState<Alumno[]>([])
   const [sesiones, setSesiones] = useState<Sesion[]>([])
+  const [reservasMes, setReservasMes] = useState<ReservaMes[]>([])
   const [error, setError] = useState('')
   const [cargando, setCargando] = useState(true)
 
@@ -95,10 +102,21 @@ export default function FinanzasPage() {
       .order('fecha', { ascending: false })
       .limit(50)
 
-    if (pErr || gErr || aErr || sErr) {
+    const mesActual = fechaLocal(new Date()).slice(0, 7)
+    const inicioMes = mesActual + '-01'
+    const finMes = mesActual + '-31'
+
+    const { data: r, error: rErr } = await supabase
+      .from('reservas')
+      .select('alumno_id, estado, alumnos(nombre), sesiones!inner(fecha)')
+      .neq('estado', 'cancelado')
+      .gte('sesiones.fecha', inicioMes)
+      .lte('sesiones.fecha', finMes)
+
+    if (pErr || gErr || aErr || sErr || rErr) {
       setError(
         'Error al cargar datos: ' +
-          (pErr?.message || gErr?.message || aErr?.message || sErr?.message)
+          (pErr?.message || gErr?.message || aErr?.message || sErr?.message || rErr?.message)
       )
       setCargando(false)
       return
@@ -108,6 +126,13 @@ export default function FinanzasPage() {
     setGastos(g || [])
     setAlumnos(a || [])
     setSesiones(s || [])
+    setReservasMes(
+      (r || []).map((row: any) => ({
+        alumno_id: row.alumno_id,
+        estado: row.estado,
+        alumno_nombre: row.alumnos?.nombre || 'Sin nombre',
+      }))
+    )
     setCargando(false)
   }
 
@@ -219,6 +244,57 @@ export default function FinanzasPage() {
 
   const balance = totalPagos - totalGastos
 
+  // Desglose por mes (YYYY-MM) combinando pagos y gastos
+  const mesesMap: Record<string, { ingresos: number; gastos: number }> = {}
+
+  for (const pago of pagos) {
+    const mes = (pago.fecha_pago || '').slice(0, 7)
+    if (!mes) continue
+    if (!mesesMap[mes]) mesesMap[mes] = { ingresos: 0, gastos: 0 }
+    mesesMap[mes].ingresos += Number(pago.monto || 0)
+  }
+
+  for (const gasto of gastos) {
+    const mes = (gasto.fecha || '').slice(0, 7)
+    if (!mes) continue
+    if (!mesesMap[mes]) mesesMap[mes] = { ingresos: 0, gastos: 0 }
+    mesesMap[mes].gastos += Number(gasto.monto || 0)
+  }
+
+  const desgloseMeses = Object.entries(mesesMap)
+    .map(([mes, v]) => ({ mes, ...v, balance: v.ingresos - v.gastos }))
+    .sort((a, b) => b.mes.localeCompare(a.mes))
+
+  function nombreMes(mes: string) {
+    const [y, m] = mes.split('-')
+    const nombres = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+    return `${nombres[Number(m) - 1]} ${y}`
+  }
+
+  // Alumnos que han reservado clases este mes pero no tienen ningún pago marcado como "pagado" en este mes
+  const mesActual = fechaLocal(new Date()).slice(0, 7)
+
+  const alumnosConPagoEsteMes = new Set(
+    pagos
+      .filter((p) => p.pagado && (p.fecha_pago || '').slice(0, 7) === mesActual)
+      .map((p) => p.alumno_id)
+  )
+
+  const reservasEsteMesPorAlumno: Record<string, { nombre: string; clases: number }> = {}
+  for (const r of reservasMes) {
+    if (r.estado === 'cancelado') continue
+    if (!r.alumno_id) continue
+    if (!reservasEsteMesPorAlumno[r.alumno_id]) {
+      reservasEsteMesPorAlumno[r.alumno_id] = { nombre: r.alumno_nombre || 'Sin nombre', clases: 0 }
+    }
+    reservasEsteMesPorAlumno[r.alumno_id].clases += 1
+  }
+
+  const alumnosSinPagar = Object.entries(reservasEsteMesPorAlumno)
+    .filter(([alumnoId]) => !alumnosConPagoEsteMes.has(alumnoId))
+    .map(([alumnoId, info]) => ({ alumnoId, ...info }))
+    .sort((a, b) => b.clases - a.clases)
+
   return (
     <main className="min-h-screen bg-gray-50 p-6">
       <div className="mx-auto max-w-6xl">
@@ -264,6 +340,56 @@ export default function FinanzasPage() {
               {balance.toFixed(2)} €
             </p>
           </div>
+        </div>
+
+        {alumnosSinPagar.length > 0 && (
+          <div className="mb-8 rounded-xl border border-amber-200 bg-amber-50 p-5">
+            <h2 className="mb-2 flex items-center gap-2 text-lg font-bold text-amber-800">
+              ⚠️ Han reservado este mes y no tienen ningún pago registrado
+            </h2>
+            <ul className="space-y-1">
+              {alumnosSinPagar.map((a) => (
+                <li key={a.alumnoId} className="text-amber-800">
+                  <span className="font-medium">{a.nombre}</span>
+                  <span className="text-amber-600">
+                    {' '}
+                    — {a.clases} {a.clases === 1 ? 'clase' : 'clases'} reservada{a.clases === 1 ? '' : 's'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="mb-8 rounded-xl bg-white p-6 shadow">
+          <h2 className="mb-4 text-xl font-bold">Desglose por mes</h2>
+
+          {desgloseMeses.length === 0 ? (
+            <p className="text-gray-500">Todavía no hay datos.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b">
+                    <th className="p-3">Mes</th>
+                    <th className="p-3">Ingresos</th>
+                    <th className="p-3">Gastos</th>
+                    <th className="p-3">Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {desgloseMeses.map((m) => (
+                    <tr key={m.mes} className="border-b">
+                      <td className="p-3 capitalize">{nombreMes(m.mes)}</td>
+                      <td className="p-3 text-green-600">{m.ingresos.toFixed(2)} €</td>
+                      <td className="p-3 text-red-600">{m.gastos.toFixed(2)} €</td>
+                      <td className="p-3 font-medium">{m.balance.toFixed(2)} €</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         <div className="mb-8 grid gap-6 md:grid-cols-2">
