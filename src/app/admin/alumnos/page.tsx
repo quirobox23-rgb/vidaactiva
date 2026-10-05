@@ -52,21 +52,25 @@ export default function AlumnosPage() {
       ;(pagos[pago.alumno_id] ||= []).push({ monto: pago.monto, pagado: pago.pagado })
     }
 
-    const sesionIds = Array.from(new Set((r || []).map((row: any) => row.sesion_id)))
-    const infoSesion: Record<string, any> = {}
+    type ReservaRow = { alumno_id: string; sesion_id: string; sesiones?: { fecha: string } | null }
+    type SesionRow = { id: string; fecha: string; hora: string | null }
+    const reservas = (r || []) as unknown as ReservaRow[]
+
+    const sesionIds = Array.from(new Set(reservas.map(row => row.sesion_id)))
+    const infoSesion: Record<string, SesionRow> = {}
     if (sesionIds.length > 0) {
       const { data: s } = await supabase
         .from('vista_sesiones')
         .select('id, fecha, hora')
         .in('id', sesionIds)
-      for (const ses of s || []) infoSesion[ses.id] = ses
+      for (const ses of (s || []) as SesionRow[]) infoSesion[ses.id] = ses
     }
 
     const sesiones: Record<string, SesionRecordatorio[]> = {}
-    for (const row of (r || []) as any[]) {
+    for (const row of reservas) {
       const ses = infoSesion[row.sesion_id]
       ;(sesiones[row.alumno_id] ||= []).push({
-        fecha: ses?.fecha || row.sesiones?.fecha,
+        fecha: ses?.fecha || row.sesiones?.fecha || '',
         hora: ses?.hora || null,
       })
     }
@@ -75,7 +79,7 @@ export default function AlumnosPage() {
     setSesionesMes(sesiones)
   }
 
-  function enviarRecordatorio(a: any) {
+  function enviarRecordatorio(a: { id: string; nombre: string; telefono?: string | null }) {
     const texto = mensajeRecordatorio(a.nombre, mesRecordatorio, pagosMes[a.id] || [], sesionesMes[a.id] || [])
     window.open(enlaceWhatsapp(a.telefono, texto), '_blank')
   }
