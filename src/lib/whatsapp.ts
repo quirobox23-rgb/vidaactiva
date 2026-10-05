@@ -2,12 +2,17 @@
 // (enlace wa.me), sin API ni coste. Solo hay que pulsar enviar.
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
-const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
+
+// El mensaje a los alumnos va en catalán.
+const MESOS = ['gener', 'febrer', 'març', 'abril', 'maig', 'juny', 'juliol', 'agost', 'setembre', 'octubre', 'novembre', 'desembre']
+const DIES = ['diumenge', 'dilluns', 'dimarts', 'dimecres', 'dijous', 'divendres', 'dissabte']
+
+// Tarifas: lo pagado al mes → sesiones incluidas.
+const SESIONES_POR_TARIFA: Record<number, number> = { 25: 4, 45: 8 }
 
 export type SesionRecordatorio = {
   fecha: string // YYYY-MM-DD
   hora: string | null
-  actividad: string | null
 }
 
 export type PagoRecordatorio = {
@@ -20,16 +25,26 @@ export function nombreMes(mes: string) {
   return `${MESES[Number(m) - 1]} ${y}`
 }
 
+// "d'octubre de 2026", "de gener de 2026"
+function mesCatala(mes: string) {
+  const [y, m] = mes.split('-')
+  const nom = MESOS[Number(m) - 1]
+  return `${/^[aeiou]/.test(nom) ? "d'" : 'de '}${nom} de ${y}`
+}
+
 function euros(n: number) {
   return n.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' €'
 }
 
 function lineaSesion(s: SesionRecordatorio) {
   const [y, m, d] = s.fecha.split('-').map(Number)
-  const dia = DIAS[new Date(y, m - 1, d).getDay()]
+  const dia = DIES[new Date(y, m - 1, d).getDay()]
   const hora = s.hora ? `, ${s.hora.slice(0, 5)}` : ''
-  const actividad = s.actividad ? ` · ${s.actividad}` : ''
-  return `• ${dia} ${d}${hora}${actividad}`
+  return `• ${dia} ${d}${hora}`
+}
+
+function sessions(n: number) {
+  return `${n} ${n === 1 ? 'sessió' : 'sessions'}`
 }
 
 export function mensajeRecordatorio(
@@ -40,22 +55,30 @@ export function mensajeRecordatorio(
 ) {
   const pagado = pagos.filter(p => p.pagado).reduce((t, p) => t + Number(p.monto || 0), 0)
   const pendiente = pagos.filter(p => !p.pagado).reduce((t, p) => t + Number(p.monto || 0), 0)
+  const incluidas = SESIONES_POR_TARIFA[pagado]
 
-  const lineas = [`Hola ${nombre.split(' ')[0]}! 👋`, `Te paso tu resumen de ${nombreMes(mes)} en Vida Activa:`, '']
+  const lineas = [`Hola ${nombre.split(' ')[0]}! 👋`, `Et passo el teu resum ${mesCatala(mes)} a Vida Activa:`, '']
 
-  lineas.push(pagado > 0 ? `💶 Pagado: ${euros(pagado)}` : '💶 Aún no hay ningún pago registrado para este mes.')
-  if (pendiente > 0) lineas.push(`⏳ Pendiente: ${euros(pendiente)}`)
+  if (pagado > 0) {
+    lineas.push(`💶 Has pagat: ${euros(pagado)}` + (incluidas ? ` (${sessions(incluidas)} al mes)` : ''))
+  } else {
+    lineas.push("💶 Encara no tenim cap pagament registrat d'aquest mes.")
+  }
+  if (pendiente > 0) lineas.push(`⏳ Pendent de pagar: ${euros(pendiente)}`)
   lineas.push('')
 
   if (sesiones.length > 0) {
-    lineas.push(`📅 Tus sesiones (${sesiones.length}):`)
+    lineas.push(`📅 Les teves sessions reservades (${sesiones.length}${incluidas ? ` de ${incluidas}` : ''}):`)
     const ordenadas = [...sesiones].sort((a, b) => (a.fecha + (a.hora || '')).localeCompare(b.fecha + (b.hora || '')))
     ordenadas.forEach(s => lineas.push(lineaSesion(s)))
   } else {
-    lineas.push('📅 No tienes sesiones reservadas este mes.')
+    lineas.push('📅 Encara no tens cap sessió reservada aquest mes.')
+  }
+  if (incluidas && sesiones.length < incluidas) {
+    lineas.push('', `Et ${incluidas - sesiones.length === 1 ? 'queda' : 'queden'} ${sessions(incluidas - sesiones.length)} per reservar.`)
   }
 
-  lineas.push('', '¡Nos vemos! 💪')
+  lineas.push('', 'Ens veiem! 💪')
   return lineas.join('\n')
 }
 

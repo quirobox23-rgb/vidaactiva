@@ -57,7 +57,7 @@ export default function AlumnosPage() {
     if (sesionIds.length > 0) {
       const { data: s } = await supabase
         .from('vista_sesiones')
-        .select('id, actividad_nombre, fecha, hora')
+        .select('id, fecha, hora')
         .in('id', sesionIds)
       for (const ses of s || []) infoSesion[ses.id] = ses
     }
@@ -68,7 +68,6 @@ export default function AlumnosPage() {
       ;(sesiones[row.alumno_id] ||= []).push({
         fecha: ses?.fecha || row.sesiones?.fecha,
         hora: ses?.hora || null,
-        actividad: ses?.actividad_nombre || null,
       })
     }
 
