@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { fechaLocal } from '@/lib/fecha'
@@ -26,6 +26,7 @@ type Pago = {
   metodo: string
   pagado: boolean
   fecha_pago: string
+  mes_pagado?: string | null
   notas: string | null
   created_at: string
   alumnos?: {
@@ -39,6 +40,18 @@ type Gasto = {
   categoria: string
   monto: number
   fecha: string
+}
+
+// Mes al que corresponde el pago (YYYY-MM). Los pagos antiguos sin mes_pagado
+// usan el mes de la fecha de pago.
+function mesDelPago(pago: Pago): string {
+  return pago.mes_pagado || (pago.fecha_pago || '').slice(0, 7)
+}
+
+function nombreMes(mes: string) {
+  const [y, m] = mes.split('-')
+  const nombres = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+  return `${nombres[Number(m) - 1]} ${y}`
 }
 
 type ReservaMes = {
@@ -64,7 +77,11 @@ export default function FinanzasPage() {
   const [fechaPago, setFechaPago] = useState(
     fechaLocal(new Date())
   )
+  const [mesPagado, setMesPagado] = useState(
+    fechaLocal(new Date()).slice(0, 7)
+  )
   const [notasPago, setNotasPago] = useState('')
+  const [mesAbierto, setMesAbierto] = useState<string | null>(null)
 
   const [conceptoGasto, setConceptoGasto] = useState('')
   const [categoriaGasto, setCategoriaGasto] = useState('')
@@ -145,7 +162,12 @@ export default function FinanzasPage() {
       return
     }
 
-    const { error: insertError } = await supabase.from('pagos').insert({
+    if (!mesPagado) {
+      setError('Indica el mes al que corresponde el pago.')
+      return
+    }
+
+    const nuevoPago = {
       alumno_id: alumnoId,
       sesion_id: sesionId || null,
       monto: Number(montoPago),
@@ -153,7 +175,22 @@ export default function FinanzasPage() {
       pagado: pagadoPago,
       fecha_pago: fechaPago,
       notas: notasPago || null,
-    })
+    }
+
+    let { error: insertError } = await supabase
+      .from('pagos')
+      .insert({ ...nuevoPago, mes_pagado: mesPagado })
+
+    // Si la columna mes_pagado aún no existe en la base de datos, guardamos el
+    // pago igualmente (contará en el mes de la fecha de pago) y avisamos.
+    if (insertError && insertError.message.includes('mes_pagado')) {
+      ;({ error: insertError } = await supabase.from('pagos').insert(nuevoPago))
+      if (!insertError) {
+        setError(
+          'Pago guardado, pero sin el mes pagado: falta añadir la columna mes_pagado en Supabase (ver supabase/mes_pagado.sql).'
+        )
+      }
+    }
 
     if (insertError) {
       setError('Error al añadir el pago: ' + insertError.message)
@@ -166,6 +203,7 @@ export default function FinanzasPage() {
     setMetodoPago('Efectivo')
     setPagadoPago(true)
     setFechaPago(fechaLocal(new Date()))
+    setMesPagado(fechaLocal(new Date()).slice(0, 7))
     setNotasPago('')
 
     await cargarDatos()
@@ -247,8 +285,9 @@ export default function FinanzasPage() {
   // Desglose por mes (YYYY-MM) combinando pagos y gastos
   const mesesMap: Record<string, { ingresos: number; gastos: number }> = {}
 
+  // Los ingresos van al mes que se paga (concepto), no al mes en que se cobró
   for (const pago of pagos) {
-    const mes = (pago.fecha_pago || '').slice(0, 7)
+    const mes = mesDelPago(pago)
     if (!mes) continue
     if (!mesesMap[mes]) mesesMap[mes] = { ingresos: 0, gastos: 0 }
     mesesMap[mes].ingresos += Number(pago.monto || 0)
@@ -265,18 +304,19 @@ export default function FinanzasPage() {
     .map(([mes, v]) => ({ mes, ...v, balance: v.ingresos - v.gastos }))
     .sort((a, b) => b.mes.localeCompare(a.mes))
 
-  function nombreMes(mes: string) {
-    const [y, m] = mes.split('-')
-    const nombres = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
-    return `${nombres[Number(m) - 1]} ${y}`
-  }
+  const pagosDelMes = (mes: string) =>
+    pagos
+      .filter((p) => mesDelPago(p) === mes)
+      .sort((a, b) =>
+        (a.alumnos?.nombre || '').localeCompare(b.alumnos?.nombre || '')
+      )
 
-  // Alumnos que han reservado clases este mes pero no tienen ningún pago marcado como "pagado" en este mes
+  // Alumnos que han reservado clases este mes pero no tienen ningún pago marcado como "pagado" que corresponda a este mes
   const mesActual = fechaLocal(new Date()).slice(0, 7)
 
   const alumnosConPagoEsteMes = new Set(
     pagos
-      .filter((p) => p.pagado && (p.fecha_pago || '').slice(0, 7) === mesActual)
+      .filter((p) => p.pagado && mesDelPago(p) === mesActual)
       .map((p) => p.alumno_id)
   )
 
@@ -362,7 +402,10 @@ export default function FinanzasPage() {
         )}
 
         <div className="mb-8 rounded-xl bg-white p-6 shadow">
-          <h2 className="mb-4 text-xl font-bold">Desglose por mes</h2>
+          <h2 className="mb-1 text-xl font-bold">Desglose por mes</h2>
+          <p className="mb-4 text-sm text-gray-500">
+            Los ingresos cuentan en el mes que se paga, no en el día que se cobró. Pulsa un mes para ver quién lo ha pagado.
+          </p>
 
           {desgloseMeses.length === 0 ? (
             <p className="text-gray-500">Todavía no hay datos.</p>
@@ -378,14 +421,62 @@ export default function FinanzasPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {desgloseMeses.map((m) => (
-                    <tr key={m.mes} className="border-b">
-                      <td className="p-3 capitalize">{nombreMes(m.mes)}</td>
-                      <td className="p-3 text-green-600">{m.ingresos.toFixed(2)} €</td>
-                      <td className="p-3 text-red-600">{m.gastos.toFixed(2)} €</td>
-                      <td className="p-3 font-medium">{m.balance.toFixed(2)} €</td>
-                    </tr>
-                  ))}
+                  {desgloseMeses.map((m) => {
+                    const abierto = mesAbierto === m.mes
+                    const detalle = abierto ? pagosDelMes(m.mes) : []
+                    return (
+                      <Fragment key={m.mes}>
+                        <tr
+                          onClick={() => setMesAbierto(abierto ? null : m.mes)}
+                          className="cursor-pointer border-b hover:bg-gray-50"
+                        >
+                          <td className="p-3 capitalize">
+                            <span className="mr-2 text-gray-400">{abierto ? '▾' : '▸'}</span>
+                            {nombreMes(m.mes)}
+                          </td>
+                          <td className="p-3 text-green-600">{m.ingresos.toFixed(2)} €</td>
+                          <td className="p-3 text-red-600">{m.gastos.toFixed(2)} €</td>
+                          <td className="p-3 font-medium">{m.balance.toFixed(2)} €</td>
+                        </tr>
+                        {abierto && (
+                          <tr className="border-b bg-gray-50">
+                            <td colSpan={4} className="p-3">
+                              {detalle.length === 0 ? (
+                                <p className="text-sm text-gray-500">
+                                  Nadie ha pagado este mes todavía.
+                                </p>
+                              ) : (
+                                <table className="w-full text-left text-sm">
+                                  <thead>
+                                    <tr className="text-gray-500">
+                                      <th className="p-2">Alumno</th>
+                                      <th className="p-2">Fecha de cobro</th>
+                                      <th className="p-2">Método</th>
+                                      <th className="p-2">Pagado</th>
+                                      <th className="p-2">Cantidad</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {detalle.map((pago) => (
+                                      <tr key={pago.id} className="border-t">
+                                        <td className="p-2 font-medium">
+                                          {pago.alumnos?.nombre || 'Sin alumno'}
+                                        </td>
+                                        <td className="p-2">{pago.fecha_pago}</td>
+                                        <td className="p-2">{pago.metodo}</td>
+                                        <td className="p-2">{pago.pagado ? '✅' : '❌'}</td>
+                                        <td className="p-2">{Number(pago.monto).toFixed(2)} €</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -488,13 +579,26 @@ export default function FinanzasPage() {
 
               <div>
                 <label className="mb-1 block text-sm font-medium">
-                  Fecha
+                  Fecha de cobro
                 </label>
 
                 <input
                   type="date"
                   value={fechaPago}
                   onChange={(e) => setFechaPago(e.target.value)}
+                  className="w-full rounded-lg border p-2"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium">
+                  Mes que paga
+                </label>
+
+                <input
+                  type="month"
+                  value={mesPagado}
+                  onChange={(e) => setMesPagado(e.target.value)}
                   className="w-full rounded-lg border p-2"
                 />
               </div>
@@ -610,6 +714,7 @@ export default function FinanzasPage() {
                   <tr className="border-b">
                     <th className="p-3">Fecha</th>
                     <th className="p-3">Alumno</th>
+                    <th className="p-3">Mes pagado</th>
                     <th className="p-3">Método</th>
                     <th className="p-3">Pagado</th>
                     <th className="p-3">Cantidad</th>
@@ -623,6 +728,11 @@ export default function FinanzasPage() {
                       <td className="p-3">{pago.fecha_pago}</td>
                       <td className="p-3">
                         {pago.alumnos?.nombre || 'Sin alumno'}
+                      </td>
+                      <td className="p-3">
+                        <span className="rounded-full bg-blue-50 px-2 py-0.5 text-sm capitalize text-blue-700">
+                          {nombreMes(mesDelPago(pago))}
+                        </span>
                       </td>
                       <td className="p-3">{pago.metodo}</td>
                       <td className="p-3">{pago.pagado ? '✅' : '❌'}</td>
