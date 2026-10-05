@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
+import { fechaLocal } from '@/lib/fecha'
+import { enlaceWhatsapp, mensajeRecordatorio, nombreMes, PagoRecordatorio, SesionRecordatorio } from '@/lib/whatsapp'
 
 export default function AlumnosPage() {
   const [alumnos, setAlumnos] = useState<any[]>([])
@@ -14,10 +16,73 @@ export default function AlumnosPage() {
   const [nombreEdit, setNombreEdit] = useState('')
   const [telefonoEdit, setTelefonoEdit] = useState('')
   const [guardando, setGuardando] = useState(false)
+  const [mesRecordatorio, setMesRecordatorio] = useState(fechaLocal(new Date()).slice(0, 7))
+  const [pagosMes, setPagosMes] = useState<Record<string, PagoRecordatorio[]>>({})
+  const [sesionesMes, setSesionesMes] = useState<Record<string, SesionRecordatorio[]>>({})
 
   useEffect(() => {
     cargarAlumnos()
   }, [])
+
+  useEffect(() => {
+    if (mesRecordatorio) cargarResumenMes(mesRecordatorio)
+  }, [mesRecordatorio])
+
+  // Pagos y sesiones reservadas del mes elegido, agrupados por alumno, para el
+  // recordatorio de WhatsApp.
+  async function cargarResumenMes(mes: string) {
+    const { data: p, error: pErr } = await supabase.from('pagos').select('*')
+    const { data: r, error: rErr } = await supabase
+      .from('reservas')
+      .select('alumno_id, sesion_id, sesiones!inner(fecha)')
+      .neq('estado', 'cancelado')
+      .gte('sesiones.fecha', mes + '-01')
+      .lte('sesiones.fecha', mes + '-31')
+    if (pErr || rErr) {
+      setError('Error al cargar el resumen del mes: ' + (pErr?.message || rErr?.message))
+      return
+    }
+
+    const pagos: Record<string, PagoRecordatorio[]> = {}
+    for (const pago of p || []) {
+      // Los pagos sin mes_pagado (o si la columna aún no existe) cuentan en el
+      // mes de la fecha de pago.
+      const mesPago = pago.mes_pagado || (pago.fecha_pago || '').slice(0, 7)
+      if (mesPago !== mes) continue
+      ;(pagos[pago.alumno_id] ||= []).push({ monto: pago.monto, pagado: pago.pagado })
+    }
+
+    type ReservaRow = { alumno_id: string; sesion_id: string; sesiones?: { fecha: string } | null }
+    type SesionRow = { id: string; fecha: string; hora: string | null }
+    const reservas = (r || []) as unknown as ReservaRow[]
+
+    const sesionIds = Array.from(new Set(reservas.map(row => row.sesion_id)))
+    const infoSesion: Record<string, SesionRow> = {}
+    if (sesionIds.length > 0) {
+      const { data: s } = await supabase
+        .from('vista_sesiones')
+        .select('id, fecha, hora')
+        .in('id', sesionIds)
+      for (const ses of (s || []) as SesionRow[]) infoSesion[ses.id] = ses
+    }
+
+    const sesiones: Record<string, SesionRecordatorio[]> = {}
+    for (const row of reservas) {
+      const ses = infoSesion[row.sesion_id]
+      ;(sesiones[row.alumno_id] ||= []).push({
+        fecha: ses?.fecha || row.sesiones?.fecha || '',
+        hora: ses?.hora || null,
+      })
+    }
+
+    setPagosMes(pagos)
+    setSesionesMes(sesiones)
+  }
+
+  function enviarRecordatorio(a: { id: string; nombre: string; telefono?: string | null }) {
+    const texto = mensajeRecordatorio(a.nombre, mesRecordatorio, pagosMes[a.id] || [], sesionesMes[a.id] || [])
+    window.open(enlaceWhatsapp(a.telefono, texto), '_blank')
+  }
 
   async function cargarAlumnos() {
     setError('')
@@ -147,8 +212,17 @@ export default function AlumnosPage() {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-        <div className="px-6 py-4 border-b border-slate-100">
+        <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center flex-wrap gap-3">
           <h2 className="font-semibold">Lista de alumnos ({alumnos.length})</h2>
+          <label className="text-sm text-slate-500 flex items-center gap-2">
+            Recordatorio de WhatsApp de
+            <input
+              type="month"
+              value={mesRecordatorio}
+              onChange={e => setMesRecordatorio(e.target.value)}
+              className="border border-slate-300 rounded-lg px-2 py-1 text-sm text-slate-700"
+            />
+          </label>
         </div>
         <div className="divide-y divide-slate-100">
           {alumnos.length === 0 && <div className="px-6 py-6 text-center text-slate-400">No hay alumnos registrados.</div>}
@@ -193,6 +267,13 @@ export default function AlumnosPage() {
                     {a.telefono && <div className="text-sm text-slate-500">{a.telefono}</div>}
                   </div>
                   <div className="flex gap-2">
+                    <button
+                      onClick={() => enviarRecordatorio(a)}
+                      title={a.telefono ? `Enviar resumen de ${nombreMes(mesRecordatorio)} por WhatsApp` : 'Sin teléfono: WhatsApp te pedirá elegir el contacto'}
+                      className="text-sm bg-green-50 hover:bg-green-100 text-green-700 px-3 py-1 rounded-lg transition"
+                    >
+                      WhatsApp
+                    </button>
                     <button
                       onClick={() => iniciarEdicion(a)}
                       className="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1 rounded-lg transition"
