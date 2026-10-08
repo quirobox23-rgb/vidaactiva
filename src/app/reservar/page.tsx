@@ -184,6 +184,20 @@ function ReservaContent() {
     setAlumnos(data || [])
   }
 
+  // Busca un alumno con el mismo teléfono, comparando solo las últimas 9 cifras
+  // para que "612 34 56 78" y "+34612345678" cuenten como el mismo número.
+  // Si hay varios, se prefiere el que dio de alta la administradora a mano.
+  async function alumnoPorTelefono(tel: string): Promise<{ id: string } | null> {
+    const digitos = tel.replace(/\D/g, '').slice(-9)
+    if (digitos.length < 9) return null
+    const { data } = await supabase.from('alumnos').select('id, telefono, origen').not('telefono', 'is', null)
+    const coincidencias = (data || []).filter(
+      (a: { telefono: string | null }) => (a.telefono || '').replace(/\D/g, '').slice(-9) === digitos
+    )
+    if (coincidencias.length === 0) return null
+    return coincidencias.find((a: { origen: string | null }) => a.origen !== 'reserva') || coincidencias[0]
+  }
+
   async function reservar(e: React.FormEvent) {
     e.preventDefault()
     setError('')
@@ -191,8 +205,12 @@ function ReservaContent() {
     if (!sesion) return setError('Sessió no trobada')
 
     let alumnoId: string
-    const { data: existentes } = await supabase.from('alumnos').select('id').eq('nombre', nombre).limit(1)
-    const existente = existentes && existentes.length > 0 ? existentes[0] : null
+    // Primero por teléfono (aunque escriban el nombre distinto), luego por nombre.
+    let existente = await alumnoPorTelefono(telefono)
+    if (!existente) {
+      const { data: existentes } = await supabase.from('alumnos').select('id').eq('nombre', nombre).limit(1)
+      existente = existentes && existentes.length > 0 ? existentes[0] : null
+    }
 
     if (existente) {
       alumnoId = existente.id
