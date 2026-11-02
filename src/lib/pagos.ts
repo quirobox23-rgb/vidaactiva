@@ -1,8 +1,9 @@
 // Utilidades compartidas para los pagos de los socios.
 
-// Conceptos de pago. Los pagos antiguos (sin columna concepto) cuentan como
-// mensualidad.
-export const CONCEPTOS = ['Mensualidad', 'Seguro', 'Clase suelta', 'Otro'] as const
+// Conceptos de pago habituales. Con «Otro» se escribe un concepto libre
+// (p. ej. «Excursión»), que se guarda tal cual. Los pagos antiguos (sin
+// columna concepto) cuentan como mensualidad.
+export const CONCEPTOS = ['Mensualidad', 'Seguro', 'Ropa', 'Clase suelta', 'Otro'] as const
 export type Concepto = (typeof CONCEPTOS)[number]
 
 export const CONCEPTO_POR_DEFECTO: Concepto = 'Mensualidad'

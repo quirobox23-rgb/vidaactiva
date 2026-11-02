@@ -83,6 +83,7 @@ function euros(n: number) {
 const COLOR_CONCEPTO: Record<string, string> = {
   Mensualidad: 'bg-blue-50 text-blue-700',
   Seguro: 'bg-purple-50 text-purple-700',
+  Ropa: 'bg-pink-50 text-pink-700',
   'Clase suelta': 'bg-teal-50 text-teal-700',
   Otro: 'bg-gray-100 text-gray-700',
 }
@@ -119,6 +120,7 @@ export default function FinanzasPage() {
   // Formulario de pago
   const [alumnoId, setAlumnoId] = useState('')
   const [conceptoPago, setConceptoPago] = useState<string>(CONCEPTO_POR_DEFECTO)
+  const [conceptoLibre, setConceptoLibre] = useState('')
   const [sesionId, setSesionId] = useState('')
   const [montoPago, setMontoPago] = useState('')
   const [metodoPago, setMetodoPago] = useState('Efectivo')
@@ -222,6 +224,13 @@ export default function FinanzasPage() {
     )
   }
 
+  // Conceptos escritos a mano en pagos anteriores, para sugerirlos y filtrar.
+  const fijos: string[] = CONCEPTOS.filter((c) => c !== 'Otro')
+  const conceptosLibres = Array.from(new Set(pagos.map((p) => conceptoDelPago(p))))
+    .filter((c) => !fijos.includes(c))
+    .sort((a, b) => a.localeCompare(b))
+  const conceptosFiltro = [...fijos, ...conceptosLibres]
+
   // Último importe usado para el seguro, para rellenarlo solo.
   const ultimoImporteSeguro = pagos.find((p) => esSeguro(p))?.monto
 
@@ -260,6 +269,11 @@ export default function FinanzasPage() {
     }
 
     const seguro = conceptoPago === 'Seguro'
+    const concepto = conceptoPago === 'Otro' ? conceptoLibre.trim() : conceptoPago
+    if (!concepto) {
+      setError('Escribe qué está pagando (por ejemplo «Excursión»).')
+      return
+    }
     if (seguro && !/^\d{4}$/.test(anioSeguro)) {
       setError('Indica el año del seguro (por ejemplo 2026).')
       return
@@ -277,7 +291,7 @@ export default function FinanzasPage() {
       pagado: pagadoPago,
       fecha_pago: fechaPago,
       notas: notasPago || null,
-      concepto: conceptoPago,
+      concepto,
       mes_pagado: seguro ? `${anioSeguro}-01` : mesPagado,
     })
 
@@ -295,6 +309,7 @@ export default function FinanzasPage() {
 
     setAlumnoId('')
     setConceptoPago(CONCEPTO_POR_DEFECTO)
+    setConceptoLibre('')
     setSesionId('')
     setMontoPago('')
     setMetodoPago('Efectivo')
@@ -890,6 +905,22 @@ export default function FinanzasPage() {
                     </button>
                   ))}
                 </div>
+                {conceptoPago === 'Otro' && (
+                  <input
+                    type="text"
+                    list="conceptos-usados"
+                    value={conceptoLibre}
+                    onChange={(e) => setConceptoLibre(e.target.value)}
+                    className="mt-2 w-full rounded-lg border p-2"
+                    placeholder="¿Qué paga? Excursión, inscripción..."
+                    autoFocus
+                  />
+                )}
+                <datalist id="conceptos-usados">
+                  {conceptosLibres.map((c) => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
               </div>
 
               {seguroSeleccionado ? (
@@ -914,7 +945,7 @@ export default function FinanzasPage() {
                 <>
                   <div>
                     <label className="mb-1 block text-sm font-medium">
-                      Mes que paga
+                      {conceptoPago === 'Mensualidad' ? 'Mes que paga' : 'Mes en que se apunta'}
                     </label>
 
                     <input
@@ -1016,7 +1047,7 @@ export default function FinanzasPage() {
                   value={notasPago}
                   onChange={(e) => setNotasPago(e.target.value)}
                   className="w-full rounded-lg border p-2"
-                  placeholder={seguroSeleccionado ? 'Seguro anual' : 'Mensualidad de septiembre'}
+                  placeholder={seguroSeleccionado ? 'Seguro anual' : conceptoPago === 'Ropa' ? 'Camiseta talla M' : 'Detalle (opcional)'}
                 />
               </div>
 
@@ -1136,7 +1167,7 @@ export default function FinanzasPage() {
               aria-label="Filtrar por concepto"
             >
               <option value="">Todos los conceptos</option>
-              {CONCEPTOS.map((c) => (
+              {conceptosFiltro.map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
