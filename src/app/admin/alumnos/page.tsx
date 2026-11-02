@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { fechaLocal, finDeMes } from '@/lib/fecha'
 import { enlaceWhatsapp, mensajeRecordatorio, nombreMes, PagoRecordatorio, SesionRecordatorio } from '@/lib/whatsapp'
 import { esSeguro, mesDelPago } from '@/lib/pagos'
+import { AlumnoBasico, esManual, posiblesCoincidencias, unirAlumnos } from '@/lib/alumnos'
 
 export default function AlumnosPage() {
   const [alumnos, setAlumnos] = useState<any[]>([])
@@ -20,6 +21,11 @@ export default function AlumnosPage() {
   const [mesRecordatorio, setMesRecordatorio] = useState(fechaLocal(new Date()).slice(0, 7))
   const [pagosMes, setPagosMes] = useState<Record<string, PagoRecordatorio[]>>({})
   const [sesionesMes, setSesionesMes] = useState<Record<string, SesionRecordatorio[]>>({})
+  // Alumnos creados solos al reservar (no salen en la lista principal).
+  const [todosAlumnos, setTodosAlumnos] = useState<AlumnoBasico[]>([])
+  const [deReservas, setDeReservas] = useState<AlumnoBasico[]>([])
+  const [destinoUnir, setDestinoUnir] = useState<Record<string, string>>({})
+  const [uniendo, setUniendo] = useState<string | null>(null)
 
   useEffect(() => {
     cargarAlumnos()
@@ -98,6 +104,51 @@ export default function AlumnosPage() {
       return
     }
     setAlumnos(data || [])
+
+    const { data: todos } = await supabase.from('alumnos').select('id, nombre, telefono, origen').order('nombre')
+    setTodosAlumnos((todos || []) as AlumnoBasico[])
+    setDeReservas(((todos || []) as AlumnoBasico[]).filter((a) => !esManual(a)))
+  }
+
+  // Opciones para "es la misma persona que…": primero las sugeridas, luego el resto
+  // (los de la lista principal antes que los creados desde reservas).
+  function opcionesUnir(a: AlumnoBasico) {
+    const sugeridos = posiblesCoincidencias(a, todosAlumnos)
+    const idsSugeridos = new Set(sugeridos.map((s) => s.alumno.id))
+    const resto = todosAlumnos
+      .filter((o) => o.id !== a.id && !idsSugeridos.has(o.id))
+      .sort((x, y) => Number(esManual(y)) - Number(esManual(x)) || x.nombre.localeCompare(y.nombre))
+    return { sugeridos, resto }
+  }
+
+  async function unir(dup: AlumnoBasico, principalId: string) {
+    const principal = todosAlumnos.find((o) => o.id === principalId)
+    if (!principal) return
+    const tel = (x: AlumnoBasico) => (x.telefono ? ` (${x.telefono})` : '')
+    if (!confirm(
+      `¿Unir "${dup.nombre}"${tel(dup)} con "${principal.nombre}"${tel(principal)}?\n\n` +
+      `Sus reservas y pagos pasarán a "${principal.nombre}" y "${dup.nombre}" desaparecerá de las listas. Esto no se puede deshacer.`
+    )) return
+    setUniendo(dup.id)
+    setError('')
+    try {
+      await unirAlumnos(dup, principal)
+      setMensaje(`✅ "${dup.nombre}" unido con "${principal.nombre}".`)
+      setTimeout(() => setMensaje(''), 4000)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+    setUniendo(null)
+    cargarAlumnos()
+  }
+
+  async function pasarALista(a: AlumnoBasico) {
+    setError('')
+    const { error: err } = await supabase.from('alumnos').update({ origen: 'manual' }).eq('id', a.id)
+    if (err) return setError('Error al guardar: ' + err.message)
+    setMensaje(`✅ "${a.nombre}" añadido a la lista de alumnos.`)
+    setTimeout(() => setMensaje(''), 3000)
+    cargarAlumnos()
   }
 
   async function agregarAlumno(e: React.FormEvent) {
@@ -212,6 +263,71 @@ export default function AlumnosPage() {
           </button>
         </form>
       </div>
+
+      {deReservas.length > 0 && (
+        <div className="bg-amber-50 rounded-xl border border-amber-200 overflow-hidden shadow-sm">
+          <div className="px-6 py-4 border-b border-amber-100">
+            <h2 className="font-semibold text-amber-900">Revisar alumnos creados al reservar ({deReservas.length})</h2>
+            <p className="text-sm text-amber-800 mt-1">
+              Se crearon solos cuando alguien reservó con un nombre que no estaba en la lista. Si es la misma persona que otro alumno,
+              elige cuál y pulsa «Unir»: sus reservas y pagos pasan a ese alumno. Si es alguien nuevo, pulsa «Es alumno nuevo».
+            </p>
+          </div>
+          <div className="divide-y divide-amber-100">
+            {deReservas.map((a) => {
+              const { sugeridos, resto } = opcionesUnir(a)
+              const elegido = destinoUnir[a.id] ?? sugeridos[0]?.alumno.id ?? ''
+              return (
+                <div key={a.id} className="px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="font-medium">{a.nombre}</div>
+                    <div className="text-sm text-slate-500">{a.telefono || 'Sin teléfono'}</div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={elegido}
+                      onChange={(e) => setDestinoUnir({ ...destinoUnir, [a.id]: e.target.value })}
+                      className="border border-slate-300 rounded-lg px-2 py-1 text-sm bg-white max-w-[16rem]"
+                      aria-label={`Es la misma persona que…`}
+                    >
+                      <option value="">Es la misma persona que…</option>
+                      {sugeridos.length > 0 && (
+                        <optgroup label="Sugeridos">
+                          {sugeridos.map((s) => (
+                            <option key={s.alumno.id} value={s.alumno.id}>
+                              {s.alumno.nombre}{s.alumno.telefono ? ` · ${s.alumno.telefono}` : ''} ({s.motivo})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <optgroup label="Todos">
+                        {resto.map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.nombre}{o.telefono ? ` · ${o.telefono}` : ''}{esManual(o) ? '' : ' (de reserva)'}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                    <button
+                      onClick={() => unir(a, elegido)}
+                      disabled={!elegido || uniendo === a.id}
+                      className="text-sm bg-pink-600 text-white px-3 py-1 rounded-lg hover:bg-pink-700 disabled:bg-slate-300 transition"
+                    >
+                      {uniendo === a.id ? 'Uniendo...' : 'Unir'}
+                    </button>
+                    <button
+                      onClick={() => pasarALista(a)}
+                      className="text-sm bg-white border border-slate-300 text-slate-700 px-3 py-1 rounded-lg hover:bg-slate-50 transition"
+                    >
+                      Es alumno nuevo
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center flex-wrap gap-3">
