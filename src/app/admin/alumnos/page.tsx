@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
-import { fechaLocal } from '@/lib/fecha'
+import { fechaLocal, finDeMes } from '@/lib/fecha'
 import { enlaceWhatsapp, mensajeRecordatorio, nombreMes, PagoRecordatorio, SesionRecordatorio } from '@/lib/whatsapp'
 import { esSeguro, mesDelPago } from '@/lib/pagos'
 
@@ -38,7 +38,7 @@ export default function AlumnosPage() {
       .select('alumno_id, sesion_id, sesiones!inner(fecha)')
       .neq('estado', 'cancelado')
       .gte('sesiones.fecha', mes + '-01')
-      .lte('sesiones.fecha', mes + '-31')
+      .lte('sesiones.fecha', finDeMes(mes))
     if (pErr || rErr) {
       setError('Error al cargar el resumen del mes: ' + (pErr?.message || rErr?.message))
       return

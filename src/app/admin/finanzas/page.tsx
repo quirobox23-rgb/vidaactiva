@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
-import { fechaLocal } from '@/lib/fecha'
+import { fechaLocal, finDeMes } from '@/lib/fecha'
 import {
   CONCEPTOS,
   CONCEPTO_POR_DEFECTO,
@@ -205,7 +205,7 @@ export default function FinanzasPage() {
       .select('alumno_id, estado, alumnos(nombre), sesiones!inner(fecha)')
       .neq('estado', 'cancelado')
       .gte('sesiones.fecha', mes + '-01')
-      .lte('sesiones.fecha', mes + '-31')
+      .lte('sesiones.fecha', finDeMes(mes))
 
     if (rErr) {
       setError('Error al cargar las reservas: ' + rErr.message)
