@@ -99,3 +99,15 @@ export function enlaceWhatsapp(telefono: string | null | undefined, texto: strin
   const num = telefonoWhatsapp(telefono)
   return `https://wa.me/${num ?? ''}?text=${encodeURIComponent(texto)}`
 }
+
+// Recordatorio del seguro anual de la asociación (en catalán, como el resto).
+export function mensajeSeguro(nombre: string, anio: string, importe?: number) {
+  const lineas = [
+    `Hola ${nombre.split(' ')[0]}! 👋`,
+    `Et recordem que encara no tenim registrat el pagament de l'assegurança de l'associació Vida Activa per al ${anio}` +
+      (importe ? ` (${euros(importe)}).` : '.'),
+    '',
+    'Quan puguis, fes-nos-el arribar. Moltes gràcies! 💪',
+  ]
+  return lineas.join('\n')
+}

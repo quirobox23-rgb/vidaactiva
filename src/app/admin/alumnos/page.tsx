@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { fechaLocal, finDeMes } from '@/lib/fecha'
 import { enlaceWhatsapp, mensajeRecordatorio, nombreMes, PagoRecordatorio, SesionRecordatorio } from '@/lib/whatsapp'
+import { esSeguro, mesDelPago } from '@/lib/pagos'
 
 export default function AlumnosPage() {
   const [alumnos, setAlumnos] = useState<any[]>([])
@@ -46,9 +47,10 @@ export default function AlumnosPage() {
     const pagos: Record<string, PagoRecordatorio[]> = {}
     for (const pago of p || []) {
       // Los pagos sin mes_pagado (o si la columna aún no existe) cuentan en el
-      // mes de la fecha de pago.
-      const mesPago = pago.mes_pagado || (pago.fecha_pago || '').slice(0, 7)
-      if (mesPago !== mes) continue
+      // mes de la fecha de pago (ver mesDelPago).
+      // El seguro anual no entra en el resumen de la mensualidad.
+      if (esSeguro(pago)) continue
+      if (mesDelPago(pago) !== mes) continue
       ;(pagos[pago.alumno_id] ||= []).push({ monto: pago.monto, pagado: pago.pagado })
     }
 
