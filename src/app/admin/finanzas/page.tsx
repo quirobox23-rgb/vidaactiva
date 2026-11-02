@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
-import { fechaLocal } from '@/lib/fecha'
+import { fechaLocal, finDeMes } from '@/lib/fecha'
 
 type Alumno = {
   id: string
@@ -121,7 +121,7 @@ export default function FinanzasPage() {
 
     const mesActual = fechaLocal(new Date()).slice(0, 7)
     const inicioMes = mesActual + '-01'
-    const finMes = mesActual + '-31'
+    const finMes = finDeMes(mesActual)
 
     const { data: r, error: rErr } = await supabase
       .from('reservas')
