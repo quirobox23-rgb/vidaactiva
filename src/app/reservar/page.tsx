@@ -8,6 +8,7 @@ import { ca } from 'date-fns/locale'
 import Image from 'next/image'
 import Link from 'next/link'
 import { fechaLocal } from '@/lib/fecha'
+import { AlumnoBasico, digitosTelefono, esManual, normalizarNombre, tieneApellido } from '@/lib/alumnos'
 
 function horasHastaSesion(sesion: any) {
   if (!sesion?.fecha || !sesion?.hora) return null
@@ -184,38 +185,50 @@ function ReservaContent() {
     setAlumnos(data || [])
   }
 
-  // Busca un alumno con el mismo teléfono, comparando solo las últimas 9 cifras
-  // para que "612 34 56 78" y "+34612345678" cuenten como el mismo número.
-  // Si hay varios, se prefiere el que dio de alta la administradora a mano.
-  async function alumnoPorTelefono(tel: string): Promise<{ id: string } | null> {
-    const digitos = tel.replace(/\D/g, '').slice(-9)
-    if (digitos.length < 9) return null
-    const { data } = await supabase.from('alumnos').select('id, telefono, origen').not('telefono', 'is', null)
-    const coincidencias = (data || []).filter(
-      (a: { telefono: string | null }) => (a.telefono || '').replace(/\D/g, '').slice(-9) === digitos
-    )
-    if (coincidencias.length === 0) return null
-    return coincidencias.find((a: { origen: string | null }) => a.origen !== 'reserva') || coincidencias[0]
-  }
-
   async function reservar(e: React.FormEvent) {
     e.preventDefault()
     setError('')
 
     if (!sesion) return setError('Sessió no trobada')
 
-    let alumnoId: string
-    // Primero por teléfono (aunque escriban el nombre distinto), luego por nombre.
-    let existente = await alumnoPorTelefono(telefono)
-    if (!existente) {
-      const { data: existentes } = await supabase.from('alumnos').select('id').eq('nombre', nombre).limit(1)
-      existente = existentes && existentes.length > 0 ? existentes[0] : null
+    const nombreLimpio = nombre.trim().replace(/\s+/g, ' ')
+    const telLimpio = telefono.trim()
+    const digitos = digitosTelefono(telLimpio)
+
+    if (!nombreLimpio) return setError('Escriu el teu nom.')
+    if (telLimpio && !digitos) return setError('El telèfon ha de tenir com a mínim 9 xifres.')
+    // Para no crear alumnos repetidos: hace falta el teléfono o el nombre con apellido.
+    if (!digitos && !tieneApellido(nombreLimpio)) {
+      return setError('Escriu el teu nom i cognom, o el teu telèfon, perquè et puguem identificar.')
     }
 
+    const { data: todos, error: errAlumnos } = await supabase.from('alumnos').select('id, nombre, telefono, origen')
+    if (errAlumnos) return setError('Error en reservar. Torna-ho a provar.')
+    const lista = (todos || []) as AlumnoBasico[]
+    // Si hay varios, se prefiere el que dio de alta la administradora a mano.
+    const elegir = (c: AlumnoBasico[]) => c.find(esManual) || c[0] || null
+
+    // Primero por teléfono (aunque escriban el nombre distinto), luego por nombre
+    // (sin tener en cuenta mayúsculas, acentos ni espacios).
+    let existente = digitos ? elegir(lista.filter((a) => digitosTelefono(a.telefono) === digitos)) : null
+    if (!existente) {
+      const nom = normalizarNombre(nombreLimpio)
+      existente = elegir(lista.filter((a) => normalizarNombre(a.nombre) === nom))
+    }
+
+    let alumnoId: string
     if (existente) {
       alumnoId = existente.id
+      // Si ya existía sin teléfono, se guarda el que acaba de escribir.
+      if (!existente.telefono && telLimpio) {
+        await supabase.from('alumnos').update({ telefono: telLimpio }).eq('id', existente.id)
+      }
     } else {
-      const { data: nuevo, error: err } = await supabase.from('alumnos').insert({ nombre, telefono, origen: 'reserva' }).select('id').single()
+      const { data: nuevo, error: err } = await supabase
+        .from('alumnos')
+        .insert({ nombre: nombreLimpio, telefono: telLimpio || null, origen: 'reserva' })
+        .select('id')
+        .single()
       if (err) return setError('Error en crear l\'alumne')
       alumnoId = nuevo!.id
     }
@@ -399,7 +412,7 @@ function ReservaContent() {
               value={nombre}
               onChange={e => setNombre(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              placeholder="Ex: Maria Garcia"
+              placeholder="Nom i cognom. Ex: Maria Garcia"
               required
             />
             <datalist id="alumnos-list">
@@ -408,7 +421,7 @@ function ReservaContent() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Telèfon (opcional)</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Telèfon</label>
             <input
               type="tel"
               value={telefono}
@@ -416,6 +429,9 @@ function ReservaContent() {
               className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               placeholder="612 345 678"
             />
+            <p className="text-xs text-slate-500 mt-1">
+              Cal posar el telèfon o bé el nom amb cognom.
+            </p>
           </div>
 
           <button
