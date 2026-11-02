@@ -32,3 +32,31 @@ export function mesDelPago(pago: PagoBase): string {
 export function anioDelSeguro(pago: PagoBase): string {
   return mesDelPago(pago).slice(0, 4)
 }
+
+// El seguro puede pagarse anual o por semestres. Se guarda en mes_pagado:
+//   anual → "AAAA-01"   1er semestre → "AAAA-S1"   2º semestre → "AAAA-S2"
+export const PERIODOS_SEGURO = ['anual', 'S1', 'S2'] as const
+export type PeriodoSeguro = (typeof PERIODOS_SEGURO)[number]
+
+export const NOMBRE_PERIODO_SEGURO: Record<PeriodoSeguro, string> = {
+  anual: 'Anual',
+  S1: '1er semestre',
+  S2: '2º semestre',
+}
+
+export function periodoDelSeguro(pago: PagoBase): PeriodoSeguro {
+  const mes = mesDelPago(pago)
+  if (mes.endsWith('-S1')) return 'S1'
+  if (mes.endsWith('-S2')) return 'S2'
+  return 'anual'
+}
+
+export function mesPagadoSeguro(anio: string, periodo: PeriodoSeguro): string {
+  return periodo === 'anual' ? `${anio}-01` : `${anio}-${periodo}`
+}
+
+// Mes en que cuenta el ingreso en el desglose: el mes que se paga para las
+// cuotas; para el seguro, el mes en que se cobró.
+export function mesContable(pago: PagoBase): string {
+  return esSeguro(pago) ? (pago.fecha_pago || '').slice(0, 7) : mesDelPago(pago)
+}
