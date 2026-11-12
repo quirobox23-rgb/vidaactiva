@@ -10,7 +10,13 @@ import {
   anioDelSeguro,
   conceptoDelPago,
   esSeguro,
+  mesContable,
   mesDelPago,
+  mesPagadoSeguro,
+  NOMBRE_PERIODO_SEGURO,
+  PERIODOS_SEGURO,
+  periodoDelSeguro,
+  type PeriodoSeguro,
 } from '@/lib/pagos'
 import { enlaceWhatsapp, mensajeSeguro } from '@/lib/whatsapp'
 
@@ -73,7 +79,9 @@ function nombreMes(mes: string) {
 
 // Lo que se paga: un mes para las cuotas, un año para el seguro.
 function periodoDelPago(pago: Pago) {
-  return esSeguro(pago) ? `Año ${anioDelSeguro(pago)}` : nombreMes(mesDelPago(pago))
+  return esSeguro(pago)
+    ? `${NOMBRE_PERIODO_SEGURO[periodoDelSeguro(pago)]} ${anioDelSeguro(pago)}`
+    : nombreMes(mesDelPago(pago))
 }
 
 function euros(n: number) {
@@ -128,6 +136,7 @@ export default function FinanzasPage() {
   const [fechaPago, setFechaPago] = useState(hoy)
   const [mesPagado, setMesPagado] = useState(mesActual)
   const [anioSeguro, setAnioSeguro] = useState(anioActual)
+  const [periodoSeguro, setPeriodoSeguro] = useState<PeriodoSeguro>('anual')
   const [notasPago, setNotasPago] = useState('')
   const formPagoRef = useRef<HTMLFormElement>(null)
 
@@ -232,13 +241,27 @@ export default function FinanzasPage() {
   const conceptosFiltro = [...fijos, ...conceptosLibres]
 
   // Último importe usado para el seguro, para rellenarlo solo.
-  const ultimoImporteSeguro = pagos.find((p) => esSeguro(p))?.monto
+  // (el último del mismo tipo: anual o semestral).
+  const importeSeguro = (periodo: PeriodoSeguro) =>
+    pagos.find((p) => esSeguro(p) && (periodoDelSeguro(p) === 'anual') === (periodo === 'anual'))?.monto
+  const ultimoImporteSeguro = importeSeguro('anual')
+
+  function cambiarPeriodoSeguro(periodo: PeriodoSeguro) {
+    const antes = importeSeguro(periodoSeguro)
+    setPeriodoSeguro(periodo)
+    // Si el importe era el sugerido, lo cambiamos por el del nuevo tipo.
+    if (!montoPago || Number(montoPago) === antes) {
+      const nuevo = importeSeguro(periodo)
+      setMontoPago(nuevo ? String(nuevo) : '')
+    }
+  }
 
   function cambiarConcepto(concepto: string) {
     setConceptoPago(concepto)
     if (concepto === 'Seguro') {
       setSesionId('')
-      if (!montoPago && ultimoImporteSeguro) setMontoPago(String(ultimoImporteSeguro))
+      const sugerido = importeSeguro(periodoSeguro)
+      if (!montoPago && sugerido) setMontoPago(String(sugerido))
     }
   }
 
@@ -250,7 +273,11 @@ export default function FinanzasPage() {
     setFechaPago(hoy)
     if (concepto === 'Seguro') {
       setAnioSeguro(periodo)
-      setMontoPago(ultimoImporteSeguro ? String(ultimoImporteSeguro) : '')
+      const falta = faltaSeguro[alumno]
+      const tipo: PeriodoSeguro = falta && falta.length === 1 ? falta[0] : 'anual'
+      setPeriodoSeguro(tipo)
+      const sugerido = importeSeguro(tipo)
+      setMontoPago(sugerido ? String(sugerido) : '')
     } else {
       setMesPagado(periodo)
       setMontoPago('')
@@ -292,7 +319,7 @@ export default function FinanzasPage() {
       fecha_pago: fechaPago,
       notas: notasPago || null,
       concepto,
-      mes_pagado: seguro ? `${anioSeguro}-01` : mesPagado,
+      mes_pagado: seguro ? mesPagadoSeguro(anioSeguro, periodoSeguro) : mesPagado,
     })
 
     if (insertError) {
@@ -317,6 +344,7 @@ export default function FinanzasPage() {
     setFechaPago(hoy)
     setMesPagado(mesActual)
     setAnioSeguro(anioActual)
+    setPeriodoSeguro('anual')
     setNotasPago('')
 
     await cargarDatos()
@@ -414,7 +442,7 @@ export default function FinanzasPage() {
 
   // Los ingresos van al mes que se paga (concepto), no al mes en que se cobró
   for (const pago of pagosCobrados) {
-    const mes = mesDelPago(pago)
+    const mes = mesContable(pago)
     if (!mes) continue
     if (!mesesMap[mes]) mesesMap[mes] = { ingresos: 0, gastos: 0 }
     mesesMap[mes].ingresos += Number(pago.monto || 0)
@@ -433,7 +461,7 @@ export default function FinanzasPage() {
 
   const pagosDelMes = (mes: string) =>
     pagosCobrados
-      .filter((p) => mesDelPago(p) === mes)
+      .filter((p) => mesContable(p) === mes)
       .sort((a, b) =>
         (a.alumnos?.nombre || '').localeCompare(b.alumnos?.nombre || '')
       )
@@ -462,13 +490,23 @@ export default function FinanzasPage() {
     .map(([id, info]) => ({ alumnoId: id, ...info }))
     .sort((a, b) => b.clases - a.clases)
 
-  // 2) Seguro: socios sin el seguro cobrado para el año elegido.
-  const alumnosConSeguro = new Set(
-    pagosCobrados
-      .filter((p) => esSeguro(p) && anioDelSeguro(p) === anioPendientes)
-      .map((p) => p.alumno_id)
-  )
-  const sinSeguro = alumnos.filter((a) => !alumnosConSeguro.has(a.id))
+  // 2) Seguro: socios a los que les falta el seguro del año elegido. El año
+  //    queda cubierto con el pago anual o con los dos semestres.
+  const semestresCubiertos: Record<string, Set<string>> = {}
+  for (const p of pagosCobrados) {
+    if (!esSeguro(p) || anioDelSeguro(p) !== anioPendientes) continue
+    const periodo = periodoDelSeguro(p)
+    const cubiertos = (semestresCubiertos[p.alumno_id] ||= new Set())
+    if (periodo === 'anual' || periodo === 'S1') cubiertos.add('S1')
+    if (periodo === 'anual' || periodo === 'S2') cubiertos.add('S2')
+  }
+  const faltaSeguro: Record<string, PeriodoSeguro[]> = {}
+  for (const a of alumnos) {
+    const cubiertos = semestresCubiertos[a.id]
+    const falta = (['S1', 'S2'] as PeriodoSeguro[]).filter((s) => !cubiertos?.has(s))
+    if (falta.length > 0) faltaSeguro[a.id] = falta
+  }
+  const sinSeguro = alumnos.filter((a) => faltaSeguro[a.id])
   const conSeguro = alumnos.length - sinSeguro.length
 
   // 3) Deudas: pagos apuntados como pendientes.
@@ -712,7 +750,14 @@ export default function FinanzasPage() {
                 <ul className="divide-y">
                   {sinSeguro.map((a) => (
                     <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                      <span className="font-medium">{a.nombre}</span>
+                      <span>
+                        <span className="font-medium">{a.nombre}</span>
+                        {faltaSeguro[a.id].length === 1 && (
+                          <span className="text-gray-500">
+                            {' '}— le falta el {NOMBRE_PERIODO_SEGURO[faltaSeguro[a.id][0]]}
+                          </span>
+                        )}
+                      </span>
                       <span className="flex gap-4 text-sm">
                         <a
                           href={enlaceWhatsapp(a.telefono, mensajeSeguro(a.nombre, anioPendientes, ultimoImporteSeguro))}
@@ -777,7 +822,7 @@ export default function FinanzasPage() {
         <div className="mb-8 rounded-xl bg-white p-6 shadow">
           <h2 className="mb-1 text-xl font-bold">Desglose por mes</h2>
           <p className="mb-4 text-sm text-gray-500">
-            Solo cuenta lo cobrado. Los ingresos cuentan en el mes que se paga, no en el día que se cobró (el seguro, en enero de su año). Pulsa un mes para ver quién lo ha pagado.
+            Solo cuenta lo cobrado. Las cuotas cuentan en el mes que se paga, no en el día que se cobró; el seguro, en el mes en que se cobró. Pulsa un mes para ver quién lo ha pagado.
           </p>
 
           {desgloseMeses.length === 0 ? (
@@ -924,6 +969,26 @@ export default function FinanzasPage() {
               </div>
 
               {seguroSeleccionado ? (
+                <div className="space-y-4">
+                <div>
+                  <label className="mb-1 block text-sm font-medium">
+                    Periodo del seguro
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {PERIODOS_SEGURO.map((per) => (
+                      <button
+                        key={per}
+                        type="button"
+                        onClick={() => cambiarPeriodoSeguro(per)}
+                        className={`rounded-full px-3 py-1 text-sm font-medium ${
+                          periodoSeguro === per ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {NOMBRE_PERIODO_SEGURO[per]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div>
                   <label className="mb-1 block text-sm font-medium">
                     Año del seguro
@@ -938,8 +1003,9 @@ export default function FinanzasPage() {
                     className="w-full rounded-lg border p-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">
-                    Seguro anual de la asociación que paga cada socio.
+                    1er semestre: enero a junio · 2º semestre: julio a diciembre.
                   </p>
+                </div>
                 </div>
               ) : (
                 <>
@@ -1047,7 +1113,7 @@ export default function FinanzasPage() {
                   value={notasPago}
                   onChange={(e) => setNotasPago(e.target.value)}
                   className="w-full rounded-lg border p-2"
-                  placeholder={seguroSeleccionado ? 'Seguro anual' : conceptoPago === 'Ropa' ? 'Camiseta talla M' : 'Detalle (opcional)'}
+                  placeholder={seguroSeleccionado ? 'Detalle (opcional)' : conceptoPago === 'Ropa' ? 'Camiseta talla M' : 'Detalle (opcional)'}
                 />
               </div>
 
