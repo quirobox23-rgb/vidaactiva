@@ -54,9 +54,3 @@ export function periodoDelSeguro(pago: PagoBase): PeriodoSeguro {
 export function mesPagadoSeguro(anio: string, periodo: PeriodoSeguro): string {
   return periodo === 'anual' ? `${anio}-01` : `${anio}-${periodo}`
 }
-
-// Mes en que cuenta el ingreso en el desglose: el mes que se paga para las
-// cuotas; para el seguro, el mes en que se cobró.
-export function mesContable(pago: PagoBase): string {
-  return esSeguro(pago) ? (pago.fecha_pago || '').slice(0, 7) : mesDelPago(pago)
-}
