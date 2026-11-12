@@ -10,7 +10,6 @@ import {
   anioDelSeguro,
   conceptoDelPago,
   esSeguro,
-  mesContable,
   mesDelPago,
   mesPagadoSeguro,
   NOMBRE_PERIODO_SEGURO,
@@ -148,6 +147,8 @@ export default function FinanzasPage() {
 
   // Vistas
   const [mesAbierto, setMesAbierto] = useState<string | null>(null)
+  const [vistaDesglose, setVistaDesglose] = useState<'meses' | 'seguro'>('meses')
+  const [anioAbierto, setAnioAbierto] = useState<string | null>(null)
   const [pestana, setPestana] = useState<PestanaPendientes>('cuotas')
   const [mesPendientes, setMesPendientes] = useState(mesActual)
   const [anioPendientes, setAnioPendientes] = useState(anioActual)
@@ -440,9 +441,11 @@ export default function FinanzasPage() {
   // ---- Desglose por mes (YYYY-MM) combinando cobros y gastos ----
   const mesesMap: Record<string, { ingresos: number; gastos: number }> = {}
 
-  // Los ingresos van al mes que se paga (concepto), no al mes en que se cobró
+  // Los ingresos van al mes que se paga (concepto), no al mes en que se cobró.
+  // El seguro anual no entra aquí: va en su propia pestaña, por años.
   for (const pago of pagosCobrados) {
-    const mes = mesContable(pago)
+    if (esSeguro(pago)) continue
+    const mes = mesDelPago(pago)
     if (!mes) continue
     if (!mesesMap[mes]) mesesMap[mes] = { ingresos: 0, gastos: 0 }
     mesesMap[mes].ingresos += Number(pago.monto || 0)
@@ -461,10 +464,27 @@ export default function FinanzasPage() {
 
   const pagosDelMes = (mes: string) =>
     pagosCobrados
-      .filter((p) => mesContable(p) === mes)
+      .filter((p) => !esSeguro(p) && mesDelPago(p) === mes)
       .sort((a, b) =>
         (a.alumnos?.nombre || '').localeCompare(b.alumnos?.nombre || '')
       )
+
+  // ---- Seguro anual, por años ----
+  const segurosPorAnio: Record<string, Pago[]> = {}
+  for (const pago of pagosCobrados) {
+    if (!esSeguro(pago)) continue
+    const anio = anioDelSeguro(pago)
+    if (!anio) continue
+    ;(segurosPorAnio[anio] ||= []).push(pago)
+  }
+  const desgloseSeguro = Object.entries(segurosPorAnio)
+    .map(([anio, lista]) => ({
+      anio,
+      total: lista.reduce((t, p) => t + Number(p.monto || 0), 0),
+      socios: new Set(lista.map((p) => p.alumno_id)).size,
+      pagos: [...lista].sort((a, b) => (a.alumnos?.nombre || '').localeCompare(b.alumnos?.nombre || '')),
+    }))
+    .sort((a, b) => b.anio.localeCompare(a.anio))
 
   // ---- Quién no ha pagado ----
 
@@ -820,9 +840,99 @@ export default function FinanzasPage() {
 
         {/* Desglose por mes */}
         <div className="mb-8 rounded-xl bg-white p-6 shadow">
-          <h2 className="mb-1 text-xl font-bold">Desglose por mes</h2>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-xl font-bold">Desglose</h2>
+            <div className="flex rounded-lg bg-gray-100 p-1 text-sm">
+              <button
+                type="button"
+                onClick={() => setVistaDesglose('meses')}
+                className={`rounded-md px-3 py-1.5 font-medium ${vistaDesglose === 'meses' ? 'bg-white shadow text-gray-900' : 'text-gray-500'}`}
+              >
+                Cuotas por mes
+              </button>
+              <button
+                type="button"
+                onClick={() => setVistaDesglose('seguro')}
+                className={`rounded-md px-3 py-1.5 font-medium ${vistaDesglose === 'seguro' ? 'bg-white shadow text-gray-900' : 'text-gray-500'}`}
+              >
+                Seguro anual
+              </button>
+            </div>
+          </div>
+
+          {vistaDesglose === 'seguro' ? (
+            <>
+              <p className="mb-4 text-sm text-gray-500">
+                El seguro va aparte, por años, para que no se mezcle con las cuotas del mes. Solo cuenta lo cobrado. Pulsa un año para ver quién lo ha pagado.
+              </p>
+              {desgloseSeguro.length === 0 ? (
+                <p className="text-gray-500">Todavía no hay seguros cobrados.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="p-3">Seguro</th>
+                        <th className="p-3">Socios que lo han pagado</th>
+                        <th className="p-3">Cobrado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {desgloseSeguro.map((a) => {
+                        const abierto = anioAbierto === a.anio
+                        return (
+                          <Fragment key={a.anio}>
+                            <tr
+                              onClick={() => setAnioAbierto(abierto ? null : a.anio)}
+                              className="cursor-pointer border-b hover:bg-gray-50"
+                            >
+                              <td className="p-3">
+                                <span className="mr-2 text-gray-400">{abierto ? '▾' : '▸'}</span>
+                                Seguro anual {a.anio}
+                              </td>
+                              <td className="p-3">{a.socios}</td>
+                              <td className="p-3 text-green-600">{euros(a.total)}</td>
+                            </tr>
+                            {abierto && (
+                              <tr className="border-b bg-gray-50">
+                                <td colSpan={3} className="p-3">
+                                  <table className="w-full text-left text-sm">
+                                    <thead>
+                                      <tr className="text-gray-500">
+                                        <th className="p-2">Socio</th>
+                                        <th className="p-2">Periodo</th>
+                                        <th className="p-2">Fecha de cobro</th>
+                                        <th className="p-2">Método</th>
+                                        <th className="p-2">Cantidad</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {a.pagos.map((pago) => (
+                                        <tr key={pago.id} className="border-t">
+                                          <td className="p-2 font-medium">{pago.alumnos?.nombre || 'Sin socio'}</td>
+                                          <td className="p-2">{NOMBRE_PERIODO_SEGURO[periodoDelSeguro(pago)]}</td>
+                                          <td className="p-2">{pago.fecha_pago}</td>
+                                          <td className="p-2">{pago.metodo}</td>
+                                          <td className="p-2">{euros(Number(pago.monto))}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          ) : (
+          <>
           <p className="mb-4 text-sm text-gray-500">
-            Solo cuenta lo cobrado. Las cuotas cuentan en el mes que se paga, no en el día que se cobró; el seguro, en el mes en que se cobró. Pulsa un mes para ver quién lo ha pagado.
+            Cuotas y otros cobros del mes (sin el seguro, que está en su pestaña). Solo cuenta lo cobrado, en el mes que se paga, no en el día que se cobró. Pulsa un mes para ver quién lo ha pagado.
           </p>
 
           {desgloseMeses.length === 0 ? (
@@ -898,6 +1008,8 @@ export default function FinanzasPage() {
                 </tbody>
               </table>
             </div>
+          )}
+          </>
           )}
         </div>
 
