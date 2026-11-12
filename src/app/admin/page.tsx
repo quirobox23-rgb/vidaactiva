@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { fechaLocal } from '@/lib/fecha'
+import CompartirClases from '@/app/admin/CompartirClases'
 
 export default function SesionesPage() {
   const [actividades, setActividades] = useState<any[]>([])
@@ -168,6 +169,8 @@ export default function SesionesPage() {
 
       {mensaje && <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl">{mensaje}</div>}
       {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl">{error}</div>}
+
+      <CompartirClases />
 
       {/* Generar semana */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">

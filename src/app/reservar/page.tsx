@@ -8,21 +8,59 @@ import { ca } from 'date-fns/locale'
 import Image from 'next/image'
 import Link from 'next/link'
 import { fechaLocal } from '@/lib/fecha'
-import { AlumnoBasico, digitosTelefono, esManual, normalizarNombre, tieneApellido } from '@/lib/alumnos'
+import {
+  Identidad,
+  anularReserva as anularReservaDb,
+  guardarIdentidad,
+  horasHastaSesion,
+  identidadGuardada,
+  identificarAlumno,
+  reservarSesion,
+  sePuedeAnular,
+} from '@/lib/reservas'
 
-function horasHastaSesion(sesion: any) {
-  if (!sesion?.fecha || !sesion?.hora) return null
-  const horaStr = sesion.hora.length === 5 ? sesion.hora + ':00' : sesion.hora
-  const fechaHora = new Date(`${sesion.fecha}T${horaStr}`)
-  return (fechaHora.getTime() - Date.now()) / (1000 * 60 * 60)
+type Sesion = {
+  id: string
+  fecha: string
+  hora: string | null
+  actividad_nombre: string
+  enlace_token: string
+  plazas_libres: number
+  cupo_maximo?: number | null
 }
 
+type Apuntado = { reservaId: string; alumnoId: string; nombre: string }
+
+const COLORES = ['bg-pink-500', 'bg-sky-500', 'bg-amber-500', 'bg-violet-500', 'bg-emerald-500', 'bg-rose-500', 'bg-indigo-500', 'bg-teal-500']
+
+function colorDe(nombre: string) {
+  let h = 0
+  for (const c of nombre) h = (h * 31 + c.charCodeAt(0)) >>> 0
+  return COLORES[h % COLORES.length]
+}
+
+function iniciales(nombre: string) {
+  const p = nombre.trim().split(/\s+/)
+  return ((p[0]?.[0] || '') + (p[1]?.[0] || '')).toUpperCase() || '?'
+}
+
+// Lista de clases con aspecto de encuesta de WhatsApp: cada clase es una opción,
+// se toca para apuntarse o desapuntarse y se ve quién va.
 function ListaClases() {
-  const [sesiones, setSesiones] = useState<any[]>([])
+  const [sesiones, setSesiones] = useState<Sesion[]>([])
+  const [apuntados, setApuntados] = useState<Record<string, Apuntado[]>>({})
   const [cargando, setCargando] = useState(true)
+  const [yo, setYo] = useState<Identidad | null>(null)
+  const [nombre, setNombre] = useState('')
+  const [telefono, setTelefono] = useState('')
+  const [error, setError] = useState('')
+  const [aviso, setAviso] = useState('')
+  const [ocupado, setOcupado] = useState<string | null>(null)
+  const [abierta, setAbierta] = useState<string | null>(null)
+  const [identificando, setIdentificando] = useState(false)
 
   useEffect(() => {
-    cargarClases()
+    cargarClases().then(() => setYo(identidadGuardada()))
   }, [])
 
   async function cargarClases() {
@@ -35,86 +73,279 @@ function ListaClases() {
       .order('fecha')
       .order('hora')
 
-    const lista = data || []
-
-    const guardadas: Record<string, string> = {}
-    if (typeof window !== 'undefined') {
-      for (const s of lista) {
-        const raw = localStorage.getItem(`reserva_${s.enlace_token}`)
-        if (raw) {
-          try {
-            const { reservaId } = JSON.parse(raw)
-            if (reservaId) guardadas[s.enlace_token] = reservaId
-          } catch {}
-        }
-      }
-    }
-
-    const ids = Object.values(guardadas)
-    let activasIds = new Set<string>()
-    if (ids.length > 0) {
-      const { data: reservasReales } = await supabase
-        .from('reservas')
-        .select('id, estado')
-        .in('id', ids)
-      activasIds = new Set(
-        (reservasReales || []).filter(r => r.estado !== 'cancelado').map(r => r.id)
-      )
-    }
-
-    const conEstado = lista.map((s: any) => {
-      const rid = guardadas[s.enlace_token]
-      const yaReservada = !!rid && activasIds.has(rid)
-      if (rid && !yaReservada && typeof window !== 'undefined') {
-        localStorage.removeItem(`reserva_${s.enlace_token}`)
-      }
-      return { ...s, yaReservada }
+    // Las clases de hoy que ya han empezado no se enseñan.
+    const lista = ((data || []) as Sesion[]).filter((s) => {
+      const h = horasHastaSesion(s)
+      return h === null || h > 0
     })
 
-    setSesiones(conEstado)
+    const porSesion: Record<string, Apuntado[]> = {}
+    if (lista.length > 0) {
+      const { data: res } = await supabase
+        .from('reservas')
+        .select('id, sesion_id, alumno_id, estado, fecha_reserva, alumnos(nombre)')
+        .in('sesion_id', lista.map((s) => s.id))
+        .neq('estado', 'cancelado')
+        .order('fecha_reserva')
+      type Fila = { id: string; sesion_id: string; alumno_id: string; alumnos?: { nombre: string } | { nombre: string }[] | null }
+      for (const r of (res || []) as unknown as Fila[]) {
+        const al = Array.isArray(r.alumnos) ? r.alumnos[0] : r.alumnos
+        ;(porSesion[r.sesion_id] ||= []).push({ reservaId: r.id, alumnoId: r.alumno_id, nombre: al?.nombre || '—' })
+      }
+    }
+
+    setSesiones(lista)
+    setApuntados(porSesion)
     setCargando(false)
   }
 
-  const fechaBonita = (fecha: string) => format(parseISO(fecha), "EEEE d 'de' MMMM", { locale: ca })
+  async function identificarme(e: React.FormEvent) {
+    e.preventDefault()
+    setError('')
+    setIdentificando(true)
+    const r = await identificarAlumno(nombre, telefono)
+    setIdentificando(false)
+    if ('error' in r) return setError(r.error)
+    guardarIdentidad(r)
+    setYo(r)
+    setAviso(`Hola, ${r.nombre.split(' ')[0]}! Ara toca les classes on vols anar.`)
+  }
+
+  function canviarPersona() {
+    guardarIdentidad(null)
+    setYo(null)
+    setNombre('')
+    setTelefono('')
+    setAviso('')
+  }
+
+  async function tocar(s: Sesion) {
+    setError('')
+    setAviso('')
+    if (!yo) {
+      setError('Primer escriu qui ets (a dalt) i després tria les classes.')
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      return
+    }
+    const meva = (apuntados[s.id] || []).find((a) => a.alumnoId === yo.id)
+    setOcupado(s.id)
+    if (meva) {
+      if (!sePuedeAnular(s)) {
+        setOcupado(null)
+        return setError("Ja no et pots desapuntar: falta menys d'una hora per a la classe.")
+      }
+      if (!confirm(`Et desapuntes de ${s.actividad_nombre} (${diaCurt(s.fecha)} ${s.hora?.slice(0, 5) || ''})?`)) {
+        setOcupado(null)
+        return
+      }
+      const r = await anularReservaDb(meva.reservaId)
+      if (r.error) setError(r.error)
+      else {
+        localStorage.removeItem(`reserva_${s.enlace_token}`)
+        setAviso(`Desapuntat/da de ${s.actividad_nombre}.`)
+      }
+    } else {
+      const r = await reservarSesion(s, yo.id)
+      if ('error' in r) setError(r.error)
+      else {
+        localStorage.setItem(`reserva_${s.enlace_token}`, JSON.stringify({ nombre: yo.nombre, reservaId: r.id }))
+        setAviso(`✅ Apuntat/da a ${s.actividad_nombre}, ${diaCurt(s.fecha)} a les ${s.hora?.slice(0, 5) || ''}.`)
+      }
+    }
+    await cargarClases()
+    setOcupado(null)
+  }
+
+  const diaCurt = (fecha: string) => format(parseISO(fecha), "EEEE d", { locale: ca })
+  const diaLlarg = (fecha: string) => format(parseISO(fecha), "EEEE d 'de' MMMM", { locale: ca })
+
+  // Agrupadas por día, como secciones de la encuesta.
+  const dias: { fecha: string; sesiones: Sesion[] }[] = []
+  for (const s of sesiones) {
+    const ultimo = dias[dias.length - 1]
+    if (ultimo && ultimo.fecha === s.fecha) ultimo.sesiones.push(s)
+    else dias.push({ fecha: s.fecha, sesiones: [s] })
+  }
 
   return (
-    <div className="min-h-screen p-6 bg-slate-100">
-      <div className="max-w-md mx-auto">
-        <div className="text-center mb-6">
-          <Image src="/logopng.png" alt="Vida Activa" width={64} height={64} className="mx-auto mb-3 rounded-lg" />
-          <h1 className="text-2xl font-bold text-slate-800">Classes disponibles</h1>
-          <p className="text-slate-500 text-sm mt-1">Tria la classe on vols reservar</p>
+    <div className="min-h-screen bg-[#efeae2] px-4 py-6">
+      <div className="max-w-md mx-auto space-y-4">
+        <div className="flex items-center gap-3">
+          <Image src="/logopng.png" alt="Vida Activa" width={48} height={48} className="rounded-full shadow" />
+          <div>
+            <div className="font-bold text-slate-800 leading-tight">Vida Activa</div>
+            <div className="text-xs text-slate-500">entrena · supera&apos;t · viu actiu</div>
+          </div>
         </div>
 
-        {cargando ? (
-          <div className="text-center text-slate-400">Carregant...</div>
-        ) : sesiones.length === 0 ? (
-          <div className="text-center text-slate-400 bg-white rounded-2xl p-6">No hi ha classes properes disponibles.</div>
-        ) : (
-          <div className="space-y-3">
-            {sesiones.map((s) => (
-              <Link
-                key={s.id}
-                href={`/reservar?token=${s.enlace_token}`}
-                className={`block rounded-2xl shadow-lg p-5 transition ${
-                  s.yaReservada
-                    ? 'bg-slate-100 opacity-70'
-                    : 'bg-white hover:shadow-xl'
-                }`}
+        {/* Quién reserva */}
+        <div className="bg-white rounded-2xl rounded-tl-sm shadow-sm p-4">
+          {yo ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className={`w-9 h-9 rounded-full text-white text-sm font-semibold flex items-center justify-center ${colorDe(yo.nombre)}`}>
+                  {iniciales(yo.nombre)}
+                </span>
+                <div>
+                  <div className="text-xs text-slate-500">Reserves com a</div>
+                  <div className="font-semibold text-slate-800">{yo.nombre}</div>
+                </div>
+              </div>
+              <button onClick={canviarPersona} className="text-sm text-[#008069] font-medium hover:underline">
+                No sóc jo
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={identificarme} className="space-y-3">
+              <div className="font-semibold text-slate-800">👋 Primer, digues qui ets</div>
+              <input
+                value={nombre}
+                onChange={(e) => setNombre(e.target.value)}
+                className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-[#25D366] focus:border-[#25D366] outline-none"
+                placeholder="Nom i cognom"
+                autoComplete="name"
+                required
+              />
+              <input
+                type="tel"
+                value={telefono}
+                onChange={(e) => setTelefono(e.target.value)}
+                className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-[#25D366] focus:border-[#25D366] outline-none"
+                placeholder="Telèfon (612 345 678)"
+                autoComplete="tel"
+              />
+              <p className="text-xs text-slate-500">Cal el telèfon o bé el nom amb cognom. Només ho has de fer una vegada.</p>
+              <button
+                type="submit"
+                disabled={identificando}
+                className="w-full bg-[#25D366] text-white py-2.5 rounded-xl font-semibold hover:bg-[#1ebe5a] disabled:opacity-60 transition"
               >
-                <div className="font-semibold text-slate-800">{s.actividad_nombre}</div>
-                <div className="text-slate-500 text-sm capitalize">{fechaBonita(s.fecha)} — {s.hora?.slice(0,5)}</div>
-                {s.yaReservada ? (
-                  <div className="text-sm mt-1 font-medium text-slate-500">✓ Ja reservada</div>
-                ) : (
-                  <div className={`text-sm mt-1 font-medium ${s.plazas_libres > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {s.plazas_libres > 0 ? `${s.plazas_libres} places lliures` : 'Completa'}
-                  </div>
-                )}
-              </Link>
-            ))}
+                {identificando ? 'Un moment...' : 'Continuar'}
+              </button>
+            </form>
+          )}
+        </div>
+
+        {error && <div className="p-3 bg-red-50 text-red-600 rounded-xl text-sm shadow-sm">{error}</div>}
+        {aviso && <div className="p-3 bg-[#d9fdd3] text-slate-700 rounded-xl text-sm shadow-sm">{aviso}</div>}
+
+        {/* La "encuesta" */}
+        <div className="bg-white rounded-2xl rounded-tl-sm shadow-sm p-4">
+          <div className="flex items-start gap-2 mb-1">
+            <span className="text-xl">📊</span>
+            <div>
+              <h1 className="font-bold text-slate-800 text-lg leading-tight">On vols venir?</h1>
+              <p className="text-xs text-slate-500 mt-0.5">Toca una classe per apuntar-t&apos;hi. Pots triar-ne més d&apos;una.</p>
+            </div>
           </div>
-        )}
+
+          {cargando ? (
+            <div className="text-center text-slate-400 py-6">Carregant...</div>
+          ) : dias.length === 0 ? (
+            <div className="text-center text-slate-400 py-6">No hi ha classes properes disponibles.</div>
+          ) : (
+            dias.map((d) => (
+              <div key={d.fecha} className="mt-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-[#008069] mb-1 capitalize">{diaLlarg(d.fecha)}</div>
+                <div className="divide-y divide-slate-100">
+                  {d.sesiones.map((s) => {
+                    const gent = apuntados[s.id] || []
+                    const meva = !!yo && gent.some((a) => a.alumnoId === yo.id)
+                    const cupo = s.cupo_maximo || gent.length + Math.max(s.plazas_libres, 0) || 1
+                    const plena = s.plazas_libres <= 0 && !meva
+                    const pct = Math.min(100, Math.round((gent.length / cupo) * 100))
+                    return (
+                      <div key={s.id} className="py-3">
+                        <button
+                          onClick={() => tocar(s)}
+                          disabled={ocupado === s.id || plena}
+                          className="w-full flex items-start gap-3 text-left disabled:cursor-not-allowed"
+                          aria-pressed={meva}
+                        >
+                          <span
+                            className={`mt-0.5 w-6 h-6 shrink-0 rounded-full border-2 flex items-center justify-center transition ${
+                              meva ? 'bg-[#25D366] border-[#25D366]' : plena ? 'border-slate-200 bg-slate-100' : 'border-slate-400'
+                            }`}
+                          >
+                            {ocupado === s.id ? (
+                              <span className="w-3 h-3 rounded-full border-2 border-slate-400 border-t-transparent animate-spin" />
+                            ) : meva ? (
+                              <svg viewBox="0 0 24 24" className="w-4 h-4 text-white" fill="none" stroke="currentColor" strokeWidth="3"><path d="M5 12l5 5L20 7" /></svg>
+                            ) : null}
+                          </span>
+                          <span className="flex-1 min-w-0">
+                            <span className="flex items-baseline justify-between gap-2">
+                              <span className={`font-medium ${plena ? 'text-slate-400' : 'text-slate-800'}`}>
+                                {s.hora?.slice(0, 5)} · {s.actividad_nombre}
+                              </span>
+                              <span className="text-sm text-slate-500 shrink-0">
+                                {plena ? 'Completa' : `${gent.length}/${cupo}`}
+                              </span>
+                            </span>
+                            <span className="block h-1.5 mt-2 rounded-full bg-slate-200 overflow-hidden">
+                              <span
+                                className={`block h-full rounded-full transition-all ${plena ? 'bg-red-300' : 'bg-[#25D366]'}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </span>
+                          </span>
+                        </button>
+
+                        <div className="pl-9 mt-2 flex items-center justify-between gap-2">
+                          {gent.length === 0 ? (
+                            <span className="text-xs text-slate-400">Encara no hi ha ningú. Sigues la primera persona!</span>
+                          ) : (
+                            <button
+                              onClick={() => setAbierta(abierta === s.id ? null : s.id)}
+                              className="flex items-center gap-2"
+                              aria-expanded={abierta === s.id}
+                            >
+                              <span className="flex -space-x-2">
+                                {gent.slice(0, 5).map((a) => (
+                                  <span
+                                    key={a.reservaId}
+                                    title={a.nombre}
+                                    className={`w-6 h-6 rounded-full ring-2 ring-white text-[10px] text-white font-semibold flex items-center justify-center ${colorDe(a.nombre)}`}
+                                  >
+                                    {iniciales(a.nombre)}
+                                  </span>
+                                ))}
+                              </span>
+                              <span className="text-xs text-[#008069] font-medium">
+                                {abierta === s.id ? 'Amagar' : gent.length > 5 ? `+${gent.length - 5} · Qui hi va` : 'Qui hi va'}
+                              </span>
+                            </button>
+                          )}
+                          {!plena && s.plazas_libres > 0 && s.plazas_libres <= 3 && (
+                            <span className="text-xs font-medium text-amber-600">Només {s.plazas_libres} {s.plazas_libres === 1 ? 'plaça' : 'places'}!</span>
+                          )}
+                        </div>
+
+                        {abierta === s.id && gent.length > 0 && (
+                          <ul className="pl-9 mt-2 space-y-1">
+                            {gent.map((a) => (
+                              <li key={a.reservaId} className="flex items-center gap-2 text-sm text-slate-700">
+                                <span className={`w-5 h-5 rounded-full text-[9px] text-white font-semibold flex items-center justify-center ${colorDe(a.nombre)}`}>
+                                  {iniciales(a.nombre)}
+                                </span>
+                                {a.nombre}
+                                {yo && a.alumnoId === yo.id && <span className="text-xs text-slate-400">(tu)</span>}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <p className="text-xs text-center text-slate-500 px-4">
+          ✓ verd = hi estàs apuntat/da. Et pots desapuntar fins a 1 hora abans de la classe.
+        </p>
       </div>
     </div>
   )
@@ -182,6 +413,8 @@ function ReservaContent() {
 
   async function cargarAlumnos() {
     const { data } = await supabase.from('alumnos').select('*').order('nombre')
+    const yo = identidadGuardada()
+    if (yo) setNombre((n) => n || yo.nombre)
     setAlumnos(data || [])
   }
 
@@ -191,89 +424,17 @@ function ReservaContent() {
 
     if (!sesion) return setError('Sessió no trobada')
 
-    const nombreLimpio = nombre.trim().replace(/\s+/g, ' ')
-    const telLimpio = telefono.trim()
-    const digitos = digitosTelefono(telLimpio)
+    const yo = await identificarAlumno(nombre, telefono)
+    if ('error' in yo) return setError(yo.error)
+    guardarIdentidad(yo)
 
-    if (!nombreLimpio) return setError('Escriu el teu nom.')
-    if (telLimpio && !digitos) return setError('El telèfon ha de tenir com a mínim 9 xifres.')
-    // Para no crear alumnos repetidos: hace falta el teléfono o el nombre con apellido.
-    if (!digitos && !tieneApellido(nombreLimpio)) {
-      return setError('Escriu el teu nom i cognom, o el teu telèfon, perquè et puguem identificar.')
-    }
-
-    const { data: todos, error: errAlumnos } = await supabase.from('alumnos').select('id, nombre, telefono, origen')
-    if (errAlumnos) return setError('Error en reservar. Torna-ho a provar.')
-    const lista = (todos || []) as AlumnoBasico[]
-    // Si hay varios, se prefiere el que dio de alta la administradora a mano.
-    const elegir = (c: AlumnoBasico[]) => c.find(esManual) || c[0] || null
-
-    // Primero por teléfono (aunque escriban el nombre distinto), luego por nombre
-    // (sin tener en cuenta mayúsculas, acentos ni espacios).
-    let existente = digitos ? elegir(lista.filter((a) => digitosTelefono(a.telefono) === digitos)) : null
-    if (!existente) {
-      const nom = normalizarNombre(nombreLimpio)
-      existente = elegir(lista.filter((a) => normalizarNombre(a.nombre) === nom))
-    }
-
-    let alumnoId: string
-    if (existente) {
-      alumnoId = existente.id
-      // Si ya existía sin teléfono, se guarda el que acaba de escribir.
-      if (!existente.telefono && telLimpio) {
-        await supabase.from('alumnos').update({ telefono: telLimpio }).eq('id', existente.id)
-      }
-    } else {
-      const { data: nuevo, error: err } = await supabase
-        .from('alumnos')
-        .insert({ nombre: nombreLimpio, telefono: telLimpio || null, origen: 'reserva' })
-        .select('id')
-        .single()
-      if (err) return setError('Error en crear l\'alumne')
-      alumnoId = nuevo!.id
-    }
-
-    if (sesion.plazas_libres <= 0) return setError('Ho sentim, no queden places disponibles.')
-
-    const { data: reservaExistente } = await supabase
-      .from('reservas')
-      .select('id, estado')
-      .eq('sesion_id', sesion.id)
-      .eq('alumno_id', alumnoId)
-      .maybeSingle()
-
-    let reservaFinalId: string
-
-    if (reservaExistente) {
-      if (reservaExistente.estado !== 'cancelado') {
-        return setError('Ja tens una reserva en aquesta sessió.')
-      }
-      const { data: reactivada, error: errReactivar } = await supabase
-        .from('reservas')
-        .update({ estado: 'reservado' })
-        .eq('id', reservaExistente.id)
-        .select('id')
-        .single()
-      if (errReactivar) return setError('Error en reservar. Torna-ho a provar.')
-      reservaFinalId = reactivada.id
-    } else {
-      const { data: novaReserva, error: errReserva } = await supabase
-        .from('reservas')
-        .insert({ sesion_id: sesion.id, alumno_id: alumnoId })
-        .select('id')
-        .single()
-
-      if (errReserva) {
-        if (errReserva.message.includes('unique')) return setError('Ja tens una reserva en aquesta sessió.')
-        return setError('Error en reservar. Torna-ho a provar.')
-      }
-      reservaFinalId = novaReserva.id
-    }
+    const r = await reservarSesion(sesion, yo.id)
+    if ('error' in r) return setError(r.error)
 
     if (typeof window !== 'undefined') {
-      localStorage.setItem(`reserva_${token}`, JSON.stringify({ nombre, reservaId: reservaFinalId }))
+      localStorage.setItem(`reserva_${token}`, JSON.stringify({ nombre: yo.nombre, reservaId: r.id }))
     }
-    setReservaId(reservaFinalId)
+    setReservaId(r.id)
     setExito(true)
     cargarParticipantes(sesion.id)
   }
@@ -283,17 +444,9 @@ function ReservaContent() {
     if (!confirm('Segur que vols anul·lar la teva reserva?')) return
 
     setAnulando(true)
-    const { error: errAnular } = await supabase
-      .from('reservas')
-      .update({ estado: 'cancelado' })
-      .eq('id', reservaId)
-
+    const r = await anularReservaDb(reservaId)
     setAnulando(false)
-
-    if (errAnular) {
-      setError('Error en anul·lar la reserva.')
-      return
-    }
+    if (r.error) return setError(r.error)
 
     if (typeof window !== 'undefined') {
       localStorage.removeItem(`reserva_${token}`)
@@ -304,8 +457,7 @@ function ReservaContent() {
   }
 
   const fechaBonita = sesion?.fecha ? format(parseISO(sesion.fecha), "d 'de' MMMM", { locale: ca }) : ''
-  const horasRestantes = horasHastaSesion(sesion)
-  const potAnularse = horasRestantes === null || horasRestantes > 1
+  const potAnularse = sePuedeAnular(sesion)
 
   if (!token) {
     return <ListaClases />

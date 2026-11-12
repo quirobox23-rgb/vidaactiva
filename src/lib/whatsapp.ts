@@ -111,3 +111,27 @@ export function mensajeSeguro(nombre: string, anio: string, importe?: number) {
   ]
   return lineas.join('\n')
 }
+
+// Mensaje con la lista de clases para enviar al grupo (en catalán). Se ve como
+// una lista clara por días y lleva el enlace a la página de reservas, que es
+// donde se apuntan tocando cada clase, como en una encuesta.
+export type ClaseLista = { fecha: string; hora: string | null; actividad: string; plazasLibres: number }
+
+export function mensajeListaClases(clases: ClaseLista[], enlace: string) {
+  const lineas = ['🏋️‍♀️ *VIDA ACTIVA · Classes* 🏋️‍♀️', '', "Apunta't tocant l'enllaç 👇", enlace, '']
+  let diaActual = ''
+  for (const c of clases) {
+    if (c.fecha !== diaActual) {
+      diaActual = c.fecha
+      const [y, m, d] = c.fecha.split('-').map(Number)
+      const dia = DIES[new Date(y, m - 1, d).getDay()]
+      lineas.push(`📅 *${dia.charAt(0).toUpperCase() + dia.slice(1)} ${d}*`)
+    }
+    const hora = c.hora ? c.hora.slice(0, 5) : ''
+    const places =
+      c.plazasLibres <= 0 ? '🔴 completa' : c.plazasLibres <= 3 ? `🟠 ${c.plazasLibres} ${c.plazasLibres === 1 ? 'plaça' : 'places'}` : `🟢 ${c.plazasLibres} places`
+    lineas.push(`   ▫️ ${hora} ${c.actividad} — ${places}`)
+  }
+  lineas.push('', 'Et pots desapuntar fins a 1 hora abans. Ens veiem! 💪')
+  return lineas.join('\n')
+}
