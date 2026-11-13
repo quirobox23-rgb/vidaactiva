@@ -108,6 +108,13 @@ export async function unirAlumnos(duplicado: AlumnoBasico, principal: AlumnoBasi
     if (error) throw new Error('Error al copiar el teléfono: ' + error.message)
   }
 
+  // Si el duplicado tenía ficha y el principal no, la ficha pasa al principal
+  // (si no, se borraría con el duplicado). Sin sesión iniciada no se ve: no pasa nada.
+  const { data: fichaPrincipal } = await supabase.from('fichas_alumnos').select('alumno_id').eq('alumno_id', principal.id).maybeSingle()
+  if (!fichaPrincipal) {
+    await supabase.from('fichas_alumnos').update({ alumno_id: principal.id }).eq('alumno_id', duplicado.id)
+  }
+
   const { error: e4 } = await supabase.from('alumnos').delete().eq('id', duplicado.id)
   if (e4) throw new Error('Se pasaron reservas y pagos, pero no se pudo borrar el duplicado: ' + e4.message)
 }

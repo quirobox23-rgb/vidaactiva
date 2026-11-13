@@ -6,7 +6,9 @@ import Link from 'next/link'
 import { fechaLocal, finDeMes } from '@/lib/fecha'
 import { enlaceWhatsapp, mensajeRecordatorio, nombreMes, PagoRecordatorio, SesionRecordatorio } from '@/lib/whatsapp'
 import { esSeguro, mesDelPago } from '@/lib/pagos'
-import { AlumnoBasico, esManual, posiblesCoincidencias, unirAlumnos } from '@/lib/alumnos'
+import { AlumnoBasico, esManual, normalizarNombre, posiblesCoincidencias, unirAlumnos } from '@/lib/alumnos'
+import { cargarFichas, Ficha } from '@/lib/fichas'
+import { EntrarFichas, FichaAlumno } from './FichaAlumno'
 
 export default function AlumnosPage() {
   const [alumnos, setAlumnos] = useState<any[]>([])
@@ -27,9 +29,53 @@ export default function AlumnosPage() {
   const [destinoUnir, setDestinoUnir] = useState<Record<string, string>>({})
   const [uniendo, setUniendo] = useState<string | null>(null)
 
+  // Fichas (datos delicados): solo con la sesión iniciada.
+  const [sesionEmail, setSesionEmail] = useState<string | null>(null)
+  const [fichas, setFichas] = useState<Record<string, Ficha>>({})
+  const [faltaSqlFichas, setFaltaSqlFichas] = useState(false)
+  const [fichaAbierta, setFichaAbierta] = useState<{ id: string; nombre: string; telefono?: string | null } | null>(null)
+  const [mostrarEntrar, setMostrarEntrar] = useState(false)
+  const [buscar, setBuscar] = useState('')
+
   useEffect(() => {
     cargarAlumnos()
+    supabase.auth.getSession().then(({ data }) => alCambiarSesion(data.session?.user.email ?? null))
+    const { data: sub } = supabase.auth.onAuthStateChange((_evento, sesion) => alCambiarSesion(sesion?.user.email ?? null))
+    return () => sub.subscription.unsubscribe()
   }, [])
+
+  async function alCambiarSesion(email: string | null) {
+    setSesionEmail(email)
+    if (!email) {
+      setFichas({})
+      return
+    }
+    setMostrarEntrar(false)
+    const r = await cargarFichas()
+    setFaltaSqlFichas(!!r.faltaSql)
+    if (r.error && !r.faltaSql) setError('Error al cargar las fichas: ' + r.error)
+    setFichas(r.fichas)
+  }
+
+  function abrirFicha(a: { id: string; nombre: string; telefono?: string | null }) {
+    if (!sesionEmail) {
+      setMostrarEntrar(true)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      return
+    }
+    setFichaAbierta(a)
+  }
+
+  const alumnosVisibles = buscar.trim()
+    ? alumnos.filter((a) => {
+        const q = normalizarNombre(buscar)
+        const f = fichas[a.id]
+        return (
+          normalizarNombre(`${a.nombre} ${f?.apellidos || ''}`).includes(q) ||
+          (a.telefono || '').replace(/\D/g, '').includes(buscar.replace(/\D/g, '') || '#')
+        )
+      })
+    : alumnos
 
   useEffect(() => {
     if (mesRecordatorio) cargarResumenMes(mesRecordatorio)
@@ -264,6 +310,38 @@ export default function AlumnosPage() {
         </form>
       </div>
 
+      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+        {sesionEmail ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-slate-600">
+              🔓 Fichas abiertas como <span className="font-medium">{sesionEmail}</span>. Pulsa «Ficha» en cada alumno.
+            </p>
+            <button onClick={() => supabase.auth.signOut()} className="text-sm text-slate-500 hover:text-pink-600 underline">
+              Cerrar sesión
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-slate-600">
+                🔒 Las <span className="font-medium">fichas</span> (DNI, contacto de emergencia, lesiones, salud) están protegidas. Entra con tu usuario para verlas.
+              </p>
+              {!mostrarEntrar && (
+                <button onClick={() => setMostrarEntrar(true)} className="text-sm bg-pink-600 text-white px-4 py-1.5 rounded-lg hover:bg-pink-700">
+                  Entrar
+                </button>
+              )}
+            </div>
+            {mostrarEntrar && <EntrarFichas onEntrar={() => setMostrarEntrar(false)} />}
+          </div>
+        )}
+        {sesionEmail && faltaSqlFichas && (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            Falta crear la tabla de fichas en Supabase (SQL Editor). Hasta entonces no se pueden guardar.
+          </div>
+        )}
+      </div>
+
       {deReservas.length > 0 && (
         <div className="bg-amber-50 rounded-xl border border-amber-200 overflow-hidden shadow-sm">
           <div className="px-6 py-4 border-b border-amber-100">
@@ -331,7 +409,15 @@ export default function AlumnosPage() {
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center flex-wrap gap-3">
-          <h2 className="font-semibold">Lista de alumnos ({alumnos.length})</h2>
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="font-semibold">Lista de alumnos ({alumnos.length})</h2>
+            <input
+              value={buscar}
+              onChange={e => setBuscar(e.target.value)}
+              placeholder="Buscar por nombre o teléfono"
+              className="border border-slate-300 rounded-lg px-3 py-1 text-sm"
+            />
+          </div>
           <label className="text-sm text-slate-500 flex items-center gap-2">
             Recordatorio de WhatsApp de
             <input
@@ -344,7 +430,10 @@ export default function AlumnosPage() {
         </div>
         <div className="divide-y divide-slate-100">
           {alumnos.length === 0 && <div className="px-6 py-6 text-center text-slate-400">No hay alumnos registrados.</div>}
-          {alumnos.map(a => (
+          {alumnos.length > 0 && alumnosVisibles.length === 0 && (
+            <div className="px-6 py-6 text-center text-slate-400">Nadie coincide con «{buscar}».</div>
+          )}
+          {alumnosVisibles.map(a => (
             <div key={a.id} className="px-6 py-3">
               {editandoId === a.id ? (
                 <div className="flex gap-3 items-end flex-wrap">
@@ -381,10 +470,26 @@ export default function AlumnosPage() {
               ) : (
                 <div className="flex justify-between items-center">
                   <div>
-                    <div className="font-medium">{a.nombre}</div>
+                    <div className="font-medium">
+                      {a.nombre}{fichas[a.id]?.apellidos ? ` ${fichas[a.id].apellidos}` : ''}
+                    </div>
                     {a.telefono && <div className="text-sm text-slate-500">{a.telefono}</div>}
+                    {sesionEmail && fichas[a.id]?.lesiones && (
+                      <div className="mt-1 inline-block rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700" title={fichas[a.id].lesiones || ''}>
+                        🩹 {fichas[a.id].lesiones!.length > 40 ? fichas[a.id].lesiones!.slice(0, 40) + '…' : fichas[a.id].lesiones}
+                      </div>
+                    )}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap justify-end">
+                    <button
+                      onClick={() => abrirFicha(a)}
+                      className={`text-sm px-3 py-1 rounded-lg transition ${
+                        sesionEmail && fichas[a.id] ? 'bg-pink-50 hover:bg-pink-100 text-pink-700' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                      }`}
+                      title={sesionEmail ? (fichas[a.id] ? 'Ver ficha' : 'Crear ficha') : 'Entra para ver las fichas'}
+                    >
+                      {sesionEmail ? '📋 Ficha' : '🔒 Ficha'}
+                    </button>
                     <button
                       onClick={() => enviarRecordatorio(a)}
                       title={a.telefono ? `Enviar resumen de ${nombreMes(mesRecordatorio)} por WhatsApp` : 'Sin teléfono: WhatsApp te pedirá elegir el contacto'}
@@ -412,6 +517,20 @@ export default function AlumnosPage() {
           ))}
         </div>
       </div>
+
+      {fichaAbierta && (
+        <FichaAlumno
+          alumno={fichaAbierta}
+          ficha={fichas[fichaAbierta.id]}
+          onCerrar={() => setFichaAbierta(null)}
+          onGuardada={(f) => {
+            setFichas({ ...fichas, [f.alumno_id]: f })
+            setFichaAbierta(null)
+            setMensaje('✅ Ficha guardada.')
+            setTimeout(() => setMensaje(''), 3000)
+          }}
+        />
+      )}
     </div>
   )
 }
